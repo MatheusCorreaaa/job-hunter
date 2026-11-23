@@ -235,7 +235,12 @@ async function run(scheduled=false) {
 }
 
 function appIcon() {
-  return nativeImage.createFromPath(path.join(__dirname,'src','assets','app-icon.png'));
+  const assets=path.join(__dirname,'src','assets');
+  if (process.platform==='win32') {
+    const icon=nativeImage.createFromPath(path.join(assets,'app-icon.ico'));
+    if (!icon.isEmpty()) return icon;
+  }
+  return nativeImage.createFromPath(path.join(assets,'app-icon.png'));
 }
 
 function showWindow() {
