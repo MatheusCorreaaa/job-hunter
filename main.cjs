@@ -7,7 +7,7 @@ const path=require('node:path');
 const {pathToFileURL}=require('node:url');
 
 const JOB_SOURCES=require('./src/sources.js');
-const {APPLICATION_STATES,activeApplication,applicationEntry,dueSlot,nextScheduledScan}=require('./src/workflow.js');
+const {APPLICATION_STATES,activeApplication,applicationEntry,dueSlot,todaySlots,nextScheduledScan}=require('./src/workflow.js');
 const SOURCE_IDS=JOB_SOURCES.map((source)=>source.id);
 const THEMES=['system','light','dark'];
 const SOURCE_CATALOGUE_VERSION=2;
@@ -18,7 +18,7 @@ if (testDataDir) app.setPath('userData',testDataDir);
 if (process.platform==='win32') app.setAppUserModelId('br.jobhunter.desktop');
 
 const defaultSettings={auto:true,notifications:true,modes:MODES,theme:'system',sourceIds:SOURCE_IDS,sourceCatalogueVersion:SOURCE_CATALOGUE_VERSION,includeSaoPaulo:true,includeInternational:true,firecrawl:true,alexandria:false};
-const blankStatus={lastRun:null,lastSuccess:null,nextRun:null,failures:0,firstFailure:null,persistentAlert:false,lastScheduledSlot:null,sources:{}};
+const blankStatus={lastRun:null,lastSuccess:null,nextRun:null,failures:0,firstFailure:null,persistentAlert:false,lastScheduledSlot:null,scheduledRuns:[],sources:{}};
 const initial={demo:true,jobs:[],saved:['demo-1'],applications:{},alerts:[],seen:[],profile,settings:defaultSettings,status:blankStatus,resumePath:'',encryptedKey:''};
 const homePage=path.join(__dirname,'src','index.html');
 const localPage=pathToFileURL(homePage).href;
@@ -49,7 +49,12 @@ function readState() {
       settings.sourceCatalogueVersion=SOURCE_CATALOGUE_VERSION;
     }
     if (!THEMES.includes(settings.theme)) settings.theme='system';
-    return {...initial,...stored,profile:{...profile,...stored.profile},settings,status:{...blankStatus,...stored.status}};
+    const status={...blankStatus,...stored.status};
+    if (!Array.isArray(stored.status?.scheduledRuns)) {
+      status.scheduledRuns=[];
+      status.lastScheduledSlot=null;
+    }
+    return {...initial,...stored,profile:{...profile,...stored.profile},settings,status};
   } catch(error) {
     if (error.code!=='ENOENT') {
       try { renameSync(statePath,statePath+'.invalid-'+Date.now()); } catch {}
@@ -72,10 +77,12 @@ function apiKey() {
 }
 
 function state() {
+  const slots=todaySlots(localDate(Date.now()));
+  const scheduledRuns=slots.map((slot)=>({slot,run:data.status.scheduledRuns.find((entry)=>entry.slot===slot) ?? null}));
   return {
-    demo:data.demo,jobs:data.jobs,saved:data.saved,applications:data.applications,alerts:data.alerts,
+    version:app.getVersion(),demo:data.demo,jobs:data.jobs,saved:data.saved,applications:data.applications,alerts:data.alerts,
     profile:data.profile,settings:data.settings,
-    status:{running,lastRun:data.status.lastRun,nextRun:data.status.nextRun,sources:data.status.sources,progress:searchProgress}
+    status:{running,lastRun:data.status.lastRun,nextRun:data.status.nextRun,scheduledRuns,sources:data.status.sources,progress:searchProgress}
   };
 }
 
@@ -151,11 +158,18 @@ function mergeJobs(result) {
 
 async function run(scheduled=false) {
   if (running || data.demo) return;
+  const began=Date.now();
+  const pending=data.settings.auto?dueSlot(localDate(began),began):null;
+  const slot=pending>(data.status.lastScheduledSlot || 0)?pending:null;
+  if (scheduled && !slot) {
+    arm();
+    publish();
+    return;
+  }
   running=true;
   searchProgress={checked:0,queued:0};
   clearTimeout(timer);
   publish();
-  const began=Date.now();
   const settings={...data.settings,modes:[...data.settings.modes]};
   const user={...data.profile};
   const key=apiKey();
@@ -186,8 +200,9 @@ async function run(scheduled=false) {
     commit();
     return;
   }
-  if (scheduled || data.settings.auto) {
-    data.status.lastScheduledSlot=dueSlot(localDate(began),began) ?? data.status.lastScheduledSlot;
+  if (slot) {
+    data.status.lastScheduledSlot=slot;
+    data.status.scheduledRuns=[{slot,completedAt:stamp,blocked:result.blocked},...data.status.scheduledRuns].slice(0,9);
   }
   data.status.lastRun=stamp;
   data.status.sources=result.sources || {};
@@ -231,7 +246,7 @@ function showWindow() {
 
 function createWindow() {
   window=new BrowserWindow({
-    title:'Job Hunter',width:1440,height:940,minWidth:760,minHeight:620,backgroundColor:(data.settings.theme==='dark'||(data.settings.theme==='system'&&nativeTheme.shouldUseDarkColors))?'#14111e':'#f8f7fc',show:false,icon:appIcon(),
+    title:'Job Hunter '+app.getVersion(),width:1440,height:940,minWidth:760,minHeight:620,backgroundColor:(data.settings.theme==='dark'||(data.settings.theme==='system'&&nativeTheme.shouldUseDarkColors))?'#14111e':'#f8f7fc',show:false,icon:appIcon(),
     webPreferences:{preload:path.join(__dirname,'preload.cjs'),nodeIntegration:false,contextIsolation:true,sandbox:true}
   });
   window.setMenuBarVisibility(false);
@@ -493,8 +508,12 @@ const commands={
   }
 };
 
-if (!app.requestSingleInstanceLock()) app.quit();
-else {
+if (!app.requestSingleInstanceLock()) {
+  if (process.platform==='win32') {
+    dialog.showErrorBox('Job Hunter '+app.getVersion(),'Já existe um Job Hunter em execução. Para abrir esta versão, clique com o botão direito no ícone do Job Hunter perto do relógio do Windows, selecione “Sair do Job Hunter” e abra novamente o executável desta versão.');
+  }
+  app.quit();
+} else {
   app.on('second-instance',showWindow);
   app.on('activate',showWindow);
   app.on('before-quit',()=>{quitting=true;clearTimeout(timer);});

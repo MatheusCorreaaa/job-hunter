@@ -830,8 +830,11 @@ async function scan({settings,user,key='',fetcher,previous=[],now=Date.now(),onP
     });
     track('firecrawl',mapPool(webQueries(settings,user,enabled,key),2,providerSearch));
     if (key && settings.alexandria) track('alexandria',mapPool([null],1,streamRead(()=>alexandria(discover,key,settings))));
-    const recovery=['jobbol','indeed'].filter((id)=>direct.has(id));
-    if (recovery.length) {
+    const prioritySources=['jobbol','indeed'];
+    const recoveryGroups=[prioritySources,enabled.filter((id)=>!prioritySources.includes(id))];
+    for (const group of recoveryGroups) {
+      const recovery=group.filter((id)=>direct.has(id) && SEARCH_DOMAINS[id]);
+      if (!recovery.length) continue;
       const recover=Promise.all(recovery.map(async (id)=>[id,await direct.get(id)])).then(async (answers)=>{
         const unavailable=answers.filter(([id,items])=>health[id]==='error' || health[id]==='partial'&&!items.length).map(([id])=>id);
         if (!unavailable.length || providerLimited || discoveryDeadline.aborted) return;

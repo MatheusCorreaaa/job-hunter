@@ -10,7 +10,7 @@ const sources = JOB_SOURCES;
 const systemDark = window.matchMedia('(prefers-color-scheme: dark)');
 const isDark = () => state.settings.theme === 'dark' || (state.settings.theme !== 'light' && systemDark.matches);
 const sourceFor = (name) => sources.find((source)=>normalize(source.name)===normalize(name));
-const sourceImage = (source) => '<img class="source-logo" src="assets/sources/'+source.logo+'" alt="">';
+const sourceImage = (source) => '<span class="source-logo" data-fallback="'+esc(initials(source.name))+'" aria-hidden="true"><img src="assets/sources/'+esc(source.logo)+'" alt=""></span>';
 
 const defaults = {
   demo:true, jobs:[], saved:['demo-1'], applications:{}, alerts:[], profile:INITIAL_PROFILE,
@@ -46,6 +46,9 @@ const trackingFor = (id) => activeApplication(state.applications[id]);
 const currentJobs = () => allJobs().filter((job)=>!trackingFor(job.id) && isRecent(job) && (state.demo || activeCoverage(job)));
 const stageLabel = (id) => APPLICATION_STATES.find((stage)=>stage.id===id)?.label || 'Em preenchimento';
 const scheduleLabel = SCAN_TIMES.map((time)=>time.replace(':00','h')).join(' · ');
+const scheduleTime = new Intl.DateTimeFormat('pt-BR',{timeZone:'America/Sao_Paulo',hour:'2-digit',minute:'2-digit'});
+const compareRecent = (a,b) => Date.parse(b.publishedAt)-Date.parse(a.publishedAt);
+const compareMatch = (a,b) => b.score-a.score || compareRecent(a,b);
 const isSaved = (id) => state.saved.includes(id);
 const jobById = (id) => allJobs().find((job) => job.id === id);
 const checked = (condition) => condition ? ' checked' : '';
@@ -119,6 +122,8 @@ systemDark.addEventListener('change',applyTheme);
 function chrome() {
   applyTheme();
   const name = state.profile.name;
+  $('#appVersion').textContent=state.version?'v'+state.version:'';
+  $('#appVersion').hidden=!state.version;
   $('#breadcrumb').textContent = pageNames[page];
   $('#userName').textContent = name;
   $('#initials').textContent = $('#topInitials').textContent = initials(name);
@@ -131,6 +136,8 @@ function chrome() {
   $('#modePill').lastChild.textContent = state.demo ? 'Demonstração' : state.status.running ? 'Buscando' : state.settings.auto ? 'Radar ativo' : 'Radar pausado';
   $('#monitorTitle').textContent = state.demo ? 'Modo demonstração' : state.status.running ? 'Busca em andamento' : state.settings.auto ? 'Monitoramento ativo' : 'Monitoramento pausado';
   $('#monitorCopy').textContent = state.demo ? 'Explore vagas fictícias' : state.status.running ? (state.status.progress?.queued ? state.status.progress.checked+' / '+state.status.progress.queued+' anúncios checados' : 'Consultando fontes em paralelo') : state.status.nextRun ? 'Próxima busca ' + timeLabel(state.status.nextRun) : 'Busca manual disponível';
+  const schedule=$('#dailySchedule');
+  if (schedule) schedule.innerHTML=scheduleDetails();
   document.querySelectorAll('.nav').forEach((button)=>{
     button.classList.toggle('active',button.dataset.page===page);
     if (button.dataset.page === page) button.setAttribute('aria-current','page');
@@ -187,6 +194,11 @@ function toggleDropdown(menu,open,focusMode) {
   menu.classList.toggle('is-open',open);
   trigger.setAttribute('aria-expanded',String(open));
   choices.hidden=!open;
+  if (open) {
+    const bounds=menu.getBoundingClientRect();
+    const below=window.innerHeight-bounds.bottom-12;
+    menu.classList.toggle('opens-up',below<choices.offsetHeight && bounds.top>below);
+  }
   if (!open && focusMode) trigger.focus();
   if (open && focusMode) {
     const options=choices.querySelectorAll('.dropdown-option');
@@ -223,10 +235,12 @@ function board() {
 function card(job, top) {
   const saved = isSaved(job.id);
   const application=trackingFor(job.id);
+  const source=sourceFor(job.channel);
   return '<article class="card'+(job.id===selected?' active':'')+'" tabindex="0" data-job="'+esc(job.id)+'" aria-label="'+esc(job.title)+'">'+logo(job)+
     '<div><div class="card-company">'+esc(job.company)+(top?'<span class="tag">Top '+top+'</span>':'')+
     (application?'<span class="tag stage-tag">'+esc(stageLabel(application.status))+'</span>':'')+'</div><h3>'+esc(job.title)+'</h3>'+
     '<div class="card-meta"><span>'+icon('map-pin')+esc(job.location)+'</span><span>·</span><span>'+esc(job.mode)+'</span><span>·</span><span>'+ageLabel(job.publishedAt)+'</span></div>'+
+    '<div class="card-source">'+(source?sourceImage(source):icon('external-link'))+esc(job.channel || 'Site de carreiras')+'</div>'+
     '<div class="card-tags">'+[job.type,...job.skills.slice(0,4)].map((tag)=>'<span class="tag">'+esc(tag)+'</span>').join('')+'</div></div>'+
     '<div class="card-right"><span class="pill score-pill '+(job.score>=85?'green':'')+'">'+job.score+'%</span><div class="card-tools">'+
     iconButton(saved?'bookmark-check':'bookmark',saved?'Remover dos salvos':'Salvar vaga','toggleSaved',job.id,saved?'is-saved':'')+
@@ -277,14 +291,14 @@ function details(job) {
 function results() {
   const base = page==='saved' ? allJobs().filter((job)=>isSaved(job.id)) :
     page==='applications' ? allJobs().filter((job)=>trackingFor(job.id)) : currentJobs();
-  const scores = [...base].sort((a,b)=>b.score-a.score).slice(0,3);
+  const scores = [...base].sort(compareMatch).slice(0,3);
   const query = normalize(search.trim());
   const jobs = base.filter((job)=>
     (!query || normalize([job.title,job.company,job.location,job.channel,...job.skills].join(' ')).includes(query)) &&
     (mode==='Todas' || mode===job.mode || mode===job.type) &&
     (locationFilter==='Todas' || locationFilter===jobRegion(job))
   ).sort((a,b)=>sort==='updated' ? Date.parse(trackingFor(b.id)?.updatedAt ?? 0)-Date.parse(trackingFor(a.id)?.updatedAt ?? 0) :
-    sort==='recent' ? Date.parse(b.publishedAt)-Date.parse(a.publishedAt) : b.score-a.score || Date.parse(b.publishedAt)-Date.parse(a.publishedAt));
+    sort==='recent' ? compareRecent(a,b) : compareMatch(a,b));
   if (!jobs.some((job)=>job.id===selected)) selected = jobs[0]?.id ?? null;
   $('#resultSummary').textContent = state.status.running && !base.length && page==='radar' ? 'Busca em andamento' : jobs.length+' '+(jobs.length===1?'vaga':'vagas')+(state.demo?' de exemplo':'')+' · '+(sort==='updated'?'última atualização':sort==='recent'?'mais recentes':'melhor aderência');
   $('#jobList').innerHTML = jobs.length ? jobs.map((job)=>card(job,page==='radar'?scores.findIndex((item)=>item.id===job.id)+1:0)).join('') :
@@ -322,7 +336,7 @@ function sourcesPage() {
     '<form class="form" id="sourcesForm"><div class="firecrawl-source"><span class="stat-mark">'+icon('globe')+'</span><div>'+
     '<label class="check"><input type="checkbox" name="firecrawl"'+checked(state.settings.firecrawl)+'> Firecrawl automático</label>'+
     '<p>Pesquisa pública sem chave de API, sujeita ao limite do serviço.</p>'+sourceStatus('firecrawl')+'</div></div>'+
-    '<fieldset class="source-options"><legend>Portais pesquisados</legend>'+
+    '<fieldset class="source-options"><legend>Portais pesquisados</legend><p class="portal-count">'+sources.filter((source)=>enabled.includes(source.id)).length+' de '+sources.length+' portais ativos</p>'+
     sources.map((source)=>'<div class="source-row"><label class="source-check"><input type="checkbox" name="source" value="'+source.id+'"'+checked(enabled.includes(source.id))+'>'+sourceImage(source)+'<span>'+esc(source.name)+'</span></label>'+sourceStatus(source.id)+'</div>').join('')+
     '</fieldset><button type="submit" class="button primary">'+icon('check')+' Salvar fontes</button></form></section>'+
     '<section class="panel"><h2>Portais de candidatura</h2><p>Abra um portal para entrar na sua conta e preencher os formulários disponíveis.</p>'+
@@ -330,11 +344,27 @@ function sourcesPage() {
     '<hr><button class="button secondary" data-action="clearSessions">'+icon('log-out')+' Encerrar sessões locais</button></section></div>';
 }
 
+function scheduleDetails() {
+  const active=!state.demo && state.settings.auto;
+  const slots=state.status.scheduledRuns || [];
+  const now=Date.now();
+  const latestDue=slots.findLast(({slot})=>slot<=now)?.slot;
+  const entries=SCAN_TIMES.map((time,index)=>{
+    const {slot,run}=slots[index] || {};
+    const status=run?(run.blocked?'Consulta indisponível':'Executada às '+scheduleTime.format(run.completedAt)):
+      state.demo?'Demonstração':!active?'Pausada':slot<latestDue?'Não executada':'Aguardando';
+    return '<li><time>'+time+'</time><span class="pill '+(run?.blocked?'amber':run?'green':'')+'">'+esc(status)+'</span></li>';
+  });
+  const next=active && state.status.nextRun?'Próxima busca '+timeLabel(state.status.nextRun)+' (Brasília)':'';
+  return '<strong>Horários de Brasília</strong><ul>'+entries.join('')+'</ul>'+(next?'<small>'+esc(next)+'</small>':'');
+}
+
 function settingsPage() {
   return title('Configurações','Defina quando o radar roda e quais modalidades entram na busca.')+
     '<div class="settings-grid"><section class="panel"><h2>Busca diária</h2><form class="form" id="settingsForm">'+
     '<label class="check"><input type="checkbox" name="auto"'+checked(state.settings.auto)+'> Executar diariamente com o Job Hunter aberto</label>'+
-    '<div class="schedule-box"><strong>Horários de Brasília</strong><span>'+esc(scheduleLabel)+'</span></div>'+
+    '<div class="schedule-box" id="dailySchedule">'+scheduleDetails()+'</div>'+
+    '<p>O radar continua rodando com a janela fechada enquanto o ícone estiver na bandeja do sistema.</p>'+
     '<label class="check"><input type="checkbox" name="notifications"'+checked(state.settings.notifications)+'> Notificações do sistema para novas vagas</label>'+
     '<hr><h2>Modalidades</h2><div class="checks">'+['Remoto','Híbrido','Presencial'].map((item)=>'<label><input type="checkbox" name="mode" value="'+item+'"'+checked(state.settings.modes.includes(item))+'> '+item+'</label>').join('')+'</div>'+
     '<fieldset class="source-options"><legend>Localidades</legend><p>Rio de Janeiro/RJ para presencial e híbrido. Remoto precisa aceitar candidatos no Brasil.</p>'+
@@ -587,6 +617,9 @@ $('#markApplied').addEventListener('click',async ()=>{
 });
 
 decorate();
+document.addEventListener('error',(event)=>{
+  if (event.target instanceof HTMLImageElement && event.target.parentElement?.matches('.source-logo')) event.target.remove();
+},true);
 desktop?.onState((updated)=>{
   state=updated;
   if (['radar','applications','saved'].includes(page) && !document.activeElement?.matches('input,textarea,select') && !$('.dropdown.is-open')) render();

@@ -42,4 +42,4 @@ function nextScheduledScan(day, now, lastSlot) {
   return slots.find((time)=>time>now) ?? slots[0]+86400000;
 }
 
-if (typeof module==='object') module.exports={SCAN_TIMES,APPLICATION_STATES,activeApplication,applicationEntry,dueSlot,nextScheduledScan};
+if (typeof module==='object') module.exports={SCAN_TIMES,APPLICATION_STATES,activeApplication,applicationEntry,todaySlots,dueSlot,nextScheduledScan};

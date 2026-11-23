@@ -5,7 +5,7 @@
     "undici": "7.30.2"
   },
   "name": "job-hunter",
-  "version": "0.4.0",
+  "version": "0.4.1",
   "productName": "Job Hunter",
   "description": "Radar local de estágios e vagas júnior em tecnologia",
   "private": true,
