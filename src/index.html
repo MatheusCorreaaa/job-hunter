@@ -1,0 +1,61 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; font-src 'self'; script-src 'self'; connect-src 'none'; object-src 'none'; base-uri 'none'; form-action 'none'">
+  <title>Job Hunter</title>
+  <link rel="stylesheet" href="styles.css">
+  <script defer src="demo.js"></script>
+  <script defer src="sources.js"></script>
+  <script defer src="workflow.js"></script>
+  <script defer src="renderer.js"></script>
+</head>
+<body>
+  <div class="app" id="app">
+    <aside class="sidebar">
+      <a class="brand" href="#radar"><span class="brand-mark" data-icon="radar"></span><span>job<span>hunter</span><small>SEU RADAR DE CARREIRA</small></span></a>
+      <nav aria-label="Menu principal">
+        <p class="nav-label">ESPAÇO DE TRABALHO</p>
+        <button class="nav active" data-page="radar"><span data-icon="radar"></span>Radar de vagas</button>
+        <button class="nav" data-page="saved"><span data-icon="bookmark"></span>Vagas salvas<span class="nav-count" id="savedCount">0</span></button>
+        <button class="nav" data-page="applications"><span data-icon="clipboard-list"></span>Candidaturas<span id="applicationCount" class="nav-count" hidden>0</span></button>
+        <p class="nav-label">PREFERÊNCIAS</p>
+        <button class="nav" data-page="profile"><span data-icon="user-round"></span>Meu perfil</button>
+        <button class="nav" data-page="sources"><span data-icon="plug"></span>Fontes e contas</button>
+        <button class="nav" data-page="settings"><span data-icon="settings-2"></span>Configurações</button>
+      </nav>
+      <div class="sidebar-foot">
+        <div class="monitor"><span class="monitor-icon" data-icon="radio"></span><div><strong id="monitorTitle">Modo demonstração</strong><small id="monitorCopy">Conheça seu radar</small></div></div>
+        <button class="user" data-page="profile"><span class="avatar" id="initials">PD</span><span><strong id="userName">Perfil de exemplo</strong><small>Meu espaço</small></span><span data-icon="chevrons-up-down"></span></button>
+      </div>
+    </aside>
+    <main class="workspace">
+      <header class="topbar">
+        <button class="icon-button menu-toggle" id="menuToggle" aria-label="Abrir menu"><span data-icon="menu"></span></button>
+        <span class="breadcrumb"><span data-icon="layout-grid"></span><span>Meu espaço</span><span data-icon="chevron-right"></span><strong id="breadcrumb">Radar de vagas</strong></span>
+        <div class="top-actions">
+          <span class="mode-pill" id="modePill"><i></i>Demonstração</span>
+          <button class="icon-button" id="themeToggle" data-action="theme" aria-label="Ativar modo escuro"><span data-icon="moon"></span></button>
+          <button class="icon-button" id="notifications" aria-label="Notificações"><span data-icon="bell"></span><i id="notificationDot" hidden></i></button>
+          <button class="icon-button top-avatar" data-page="profile" aria-label="Meu perfil"><span class="avatar" id="topInitials">PD</span></button>
+        </div>
+      </header>
+      <div class="content" id="content"></div>
+    </main>
+  </div>
+  <header class="browser-bar" id="browserBar" hidden>
+    <button class="button secondary" id="closeBrowser"><span data-icon="arrow-left"></span><span id="browserReturnLabel">Voltar ao Job Hunter</span></button>
+    <button class="icon-button" id="browserBack" aria-label="Página anterior"><span data-icon="arrow-left"></span></button>
+    <button class="icon-button" id="browserReload" aria-label="Recarregar página"><span data-icon="rotate-cw"></span></button>
+    <span class="address"><span data-icon="lock-keyhole"></span><span id="browserAddress"></span></span>
+    <button class="button secondary" id="resumeFolder" hidden><span data-icon="file-text"></span>Localizar currículo</button>
+    <button class="button primary" id="markApplied" hidden><span data-icon="check"></span>Marcar como enviada</button>
+  </header>
+  <section class="browser-error" id="browserError" hidden aria-live="polite">
+    <div class="empty"><span class="stat-mark" data-icon="wifi-off"></span><h3>O portal não carregou</h3><p>Tente recarregar a página ou volte ao radar.</p><button class="button secondary" id="retryBrowser"><span data-icon="rotate-cw"></span>Recarregar</button></div>
+  </section>
+  <dialog id="dialog"><div id="dialogBody"></div></dialog>
+  <div class="toast" id="toast" role="status" hidden></div>
+</body>
+</html>

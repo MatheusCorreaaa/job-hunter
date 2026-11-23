@@ -1,0 +1,36 @@
+# Job Hunter
+
+Radar desktop de estágios e vagas júnior em tecnologia.
+
+## Abrir no computador
+
+Extraia todo o ZIP para uma pasta.
+
+- **Windows 64 bits ou ARM64** — abra **Abrir Job Hunter.cmd**.
+- **macOS Intel ou Apple Silicon e Linux x64** — execute `bash "Abrir Job Hunter.sh"` no Terminal, na pasta extraída. No Linux, o Electron usa o sandbox de namespaces do sistema.
+
+A primeira abertura baixa o Electron da distribuição oficial e confere o SHA‑256. As próximas usam o runtime baixado. O app vem pronto para executar, sem instalar Node.js nem rodar npm.
+
+## Ligar o radar
+
+A tela inicial contém vagas fictícias para explorar a interface. Clique em **Ativar busca real** para consultar Gupy, Jobbol, LinkedIn, Indeed, RioVagas, Vagas.com, Super Estágios, Empregos.com.br, Catho, Infojobs, Sólides Vagas, Glassdoor, 99jobs e Jooble. O Firecrawl usa a opção pública sem chave de API. Quando o Firecrawl chega ao limite temporário, o radar continua com as consultas diretas aos portais. Em **Fontes e contas**, você pode escolher os portais e ver o estado da última busca.
+
+As três buscas diárias rodam às **08h, 16h e 22h**, no horário de Brasília. O app precisa estar em execução e o computador precisa estar ligado e conectado. Quando a bandeja do sistema estiver disponível, fechar a janela mantém o radar em execução. Use **Sair do Job Hunter** na bandeja para encerrar o processo. Você também pode iniciar uma busca pelo radar.
+
+A busca limita a lista a publicações dos últimos 30 dias. A cobertura inclui presencial e híbrido na cidade do Rio de Janeiro, híbrido em São Paulo capital, remoto elegível no Brasil e anúncios no exterior. Vagas remotas do exterior precisam aceitar candidatos no Brasil. Quando a vaga no exterior publica condições de autorização de trabalho ou visto, o app as exibe no detalhe. A fonte original e um caminho de candidatura em aberto são necessários para incluir a vaga. Páginas sem informação suficiente ficam fora da lista. O radar guarda o histórico de anúncios verificados no computador e só gera avisos para novas correspondências ou uma interrupção persistente da busca.
+
+## Aparência
+
+Use a lua ou o sol no topo da janela para alternar o tema. Em **Configurações**, também é possível seguir a aparência do sistema.
+
+## Candidatar-se
+
+Em **Meu perfil**, confira as informações de formação e experiência e selecione seu currículo em PDF. Em **Fontes e contas**, abra um dos portais e entre diretamente no portal. O navegador integrado guarda as sessões neste computador. A busca roda em fontes públicas e separadas dessas sessões.
+
+Ao clicar em **Abrir candidatura**, o formulário abre na janela do Job Hunter e a vaga passa do **Radar de vagas** para **Candidaturas**, com a etapa **Em preenchimento**. Use os recursos do portal, anexe o currículo quando for necessário e faça o envio manualmente. Depois, clique em **Marcar como enviada**. Se já tiver se candidatado, use o ícone de prancheta com visto ao lado da vaga no radar.
+
+Em **Candidaturas**, atualize a etapa, registre respostas ou notas e clique em **Salvar acompanhamento**. Use **Devolver ao radar** se quiser tirar a vaga do acompanhamento. A disponibilidade de login dentro da janela depende do portal. O app usa o perfil local para calcular aderência, e cada portal mantém o próprio cadastro.
+
+## Código
+
+A pasta **codigo-fonte** contém os arquivos do projeto. Para executar a versão editável, use `npm ci` e `npm start` nessa pasta. A versão distribuída em **app** já inclui as dependências necessárias.

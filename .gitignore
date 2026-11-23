@@ -1,0 +1,10 @@
+/node_modules/
+/dist/
+/out/
+.env
+.env.*
+*.log
+*.pdf
+*.zip
+.DS_Store
+Thumbs.db
