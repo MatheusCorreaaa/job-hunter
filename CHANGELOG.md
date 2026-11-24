@@ -1,5 +1,10 @@
 # Histórico de mudanças
 
+## 0.4.10 · 24 de novembro de 2026
+
+- Aplicou a marca roxa de binóculos no menu, no painel do radar e na página de download.
+- Atualizou o ícone da janela, da barra de tarefas, da bandeja, das notificações e do executável Windows.
+
 ## 0.4.9 · 24 de novembro de 2026
 
 - A etapa de uma candidatura registrada manualmente aparece ao lado do nome da empresa em **Candidaturas → Vagas do radar**, como nas demais candidaturas.

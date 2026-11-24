@@ -2,7 +2,8 @@
 
 const $ = (query) => document.querySelector(query);
 const esc = (value = '') => String(value ?? '').replace(/[&<>"']/g, (character) => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[character]));
-const icon = (name, extra = '') => '<span class="icon ' + extra + '"><img src="assets/icons/' + name + '.svg" alt=""></span>';
+const iconPath = (name) => name==='radar' ? 'assets/job-hunter-symbol.webp' : 'assets/icons/' + name + '.svg';
+const icon = (name, extra = '') => '<span class="icon ' + extra + '"><img src="' + iconPath(name) + '" alt=""></span>';
 const iconButton = (name, label, action, id = '', extra = '') => '<button class="icon-button ' + extra + '" data-action="' + action + '" data-id="' + esc(id) + '" aria-label="' + esc(label) + '" title="' + esc(label) + '">' + icon(name) + '</button>';
 const normalize = (value) => String(value ?? '').normalize('NFD').replace(/\p{Diacritic}/gu,'').toLowerCase();
 const pageNames = {radar:'Radar de vagas',saved:'Vagas salvas',applications:'Candidaturas',profile:'Meu perfil',sources:'Fontes e contas',settings:'Configurações'};
@@ -112,7 +113,7 @@ function decorate(root = document) {
   root.querySelectorAll('[data-icon]').forEach((element)=>{
     if (element.firstElementChild) return;
     const image = document.createElement('img');
-    image.src = 'assets/icons/' + element.dataset.icon + '.svg';
+    image.src = iconPath(element.dataset.icon);
     image.alt = '';
     element.append(image);
   });
@@ -181,7 +182,7 @@ function hero() {
   ];
   const areas=['Rio de Janeiro',...(state.settings.includeSaoPaulo!==false?['São Paulo híbrido']:[]),...(state.settings.includeInternational!==false?['exterior']:[])];
   const coverage=areas.join(' · ');
-  const artwork = '<div class="radar-art" aria-hidden="true"><span style="--d:300px"></span><span style="--d:245px"></span><span style="--d:185px"></span><span style="--d:125px"></span><span style="--d:62px"></span><b style="--x:73%;--y:36%"></b><b style="--x:39%;--y:63%"></b><b style="--x:51%;--y:49%"></b><b style="--x:66%;--y:61%"></b></div>';
+  const artwork = '<img class="radar-art" src="assets/job-hunter-symbol.webp" width="640" height="327" alt="">';
   return '<section class="hero">'+artwork+
     '<div class="hero-text"><span class="hero-label">'+icon('radar')+' '+(state.settings.auto?'BUSCA DIÁRIA · '+esc(scheduleLabel)+' BRT':'BUSCA MANUAL')+'</span><h1>Seu radar de vagas</h1><p>Estágios e vagas júnior em tecnologia<br>'+esc(coverage)+' · remoto no Brasil</p></div>'+
     '<div class="hero-action"><button class="button" data-action="'+(state.demo?'enable':'scan')+'" '+(state.status.running?'disabled':'')+'>'+icon(state.demo?'zap':'refresh-cw')+(state.demo?' Ativar busca real':state.status.running?' Buscando…':' Buscar agora')+'</button></div></section>'+
