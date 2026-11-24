@@ -1,5 +1,9 @@
 # Histórico de mudanças
 
+## 0.4.11 · 24 de novembro de 2026
+
+- Restaurou a ilustração original do banner **Seu radar de vagas** e o ícone de radar no menu lateral.
+
 ## 0.4.10 · 24 de novembro de 2026
 
 - Aplicou a marca roxa de binóculos no menu, no painel do radar e na página de download.
