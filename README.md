@@ -15,6 +15,8 @@ Em **Meu perfil**, substitua o perfil de exemplo pelos seus dados. Depois, abra 
 
 O aplicativo consulta 14 portais e verifica a página original dos anúncios. As buscas automáticas rodam às **08h, 16h e 22h**, no horário de Brasília, enquanto o aplicativo está em execução. A cobertura inclui Rio de Janeiro, São Paulo capital para híbrido, remoto elegível no Brasil e oportunidades no exterior.
 
+Em **Fontes e contas**, o radar mostra o estado da última consulta de cada portal e o motivo identificado em caso de falha ou verificação incompleta.
+
 O navegador integrado abre o formulário do portal para envio manual. Em **Candidaturas**, é possível acompanhar as etapas, registrar respostas e devolver vagas ao radar. Em **Registro manual**, você também pode cadastrar candidaturas feitas antes de usar o app, com logo da empresa, cargo, portal, modalidade, localidade e datas. Perfil, currículo, sessões e registros manuais ficam no computador.
 
 Use `npm run check` para verificar a sintaxe dos arquivos principais. O [guia da versão empacotada](release/LEIA-ME.md) descreve os atalhos da distribuição.

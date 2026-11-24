@@ -214,7 +214,10 @@ dialog p{font-size:12px;color:var(--muted);line-height:1.5;margin:6px 0}
 .source-options legend{font-weight:730;font-size:12px;color:var(--ink)}
 .panel .source-check{display:flex;align-items:center;gap:8px}
 .source-check .source-logo{width:25px;height:25px;border-radius:6px}
-.source-options .pill{margin-left:auto;white-space:normal;text-align:center}
+.source-status{display:grid;justify-items:start;gap:4px}
+.source-options .source-status{margin-left:auto;justify-items:end;text-align:right}
+.source-status .pill{white-space:normal;text-align:center}
+.source-status small{max-width:24ch;color:var(--muted);font-size:10px;line-height:1.4}
 .panel select{padding:9px;border:1px solid var(--line);border-radius:8px;color:var(--ink);background:var(--panel)}
 
 :root[data-theme="dark"]{

@@ -453,7 +453,22 @@ function sourceStatus(key) {
   const lastResult=state.status.sources?.[key];
   const statuses={ok:['Consultada','green'],partial:['Consulta parcial','amber'],error:['Indisponível na última busca','amber'],limited:['Limite temporário','amber']};
   const entry=statuses[lastResult];
-  return entry?'<span class="pill '+entry[1]+'">'+entry[0]+'</span>':'';
+  if (!entry) return '';
+  const messages={
+    'http-401':'A fonte exige autenticação (HTTP 401).',
+    'http-402':'A fonte exige créditos (HTTP 402).',
+    'http-403':'A fonte recusou a consulta automática (HTTP 403).',
+    'http-404':'Endereço da pesquisa não encontrado (HTTP 404).',
+    'http-429':'A fonte limitou as requisições (HTTP 429).',
+    timeout:'A consulta excedeu o tempo de espera.',
+    network:'Falha na conexão ou na resposta da fonte.',
+    format:'A fonte não apresentou uma lista pública reconhecível.',
+    unverified:'As páginas dos anúncios não puderam ser verificadas.'
+  };
+  const issues=state.status.sourceIssues?.[key] || [];
+  const reasons=issues.map((issue)=>messages[issue] || (issue.startsWith('http-')?'Resposta HTTP '+issue.slice(5)+'.':''));
+  return '<span class="source-status"><span class="pill '+entry[1]+'">'+entry[0]+'</span>'+
+    (reasons.length?'<small>'+reasons.map(esc).join(' ')+'</small>':'')+'</span>';
 }
 
 function sourcesPage() {

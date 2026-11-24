@@ -348,9 +348,9 @@ async function gupy(feed, settings, fetcher, now) {
   for (let offset=0;offset<150;offset+=50) {
     const params=new URLSearchParams({limit:'50',offset:String(offset),sortBy:'publishedDate',sortOrder:'desc',...feed});
     const response=await fetcher('https://portal.gupy.io/api/job-search/jobs?'+params,{signal:AbortSignal.timeout(9000)});
-    if (!response.ok) throw new Error('Portal da Gupy indisponível');
+    if (!response.ok) throw httpFailure(response.status);
     const data=await response.json();
-    if (!Array.isArray(data.data)) throw new Error('Resposta do portal indisponível');
+    if (!Array.isArray(data.data)) throw listingFailure('Resposta do portal indisponível');
     for (const record of data.data) {
       const name=norm(record.name);
       const isIntern=record.type==='vacancy_type_internship'||internship.test(name);
@@ -395,9 +395,9 @@ function gupyFeeds(settings) {
 const SEARCH_DOMAINS={
   gupy:'gupy.io/jobs',jobbol:'jobbol.com.br/vaga',linkedin:'linkedin.com/jobs/view',
   indeed:'indeed.com/viewjob',riovagas:'riovagas.com.br/riovagas',vagas:'vagas.com.br/vagas',
-  superestagios:'superestagios.com.br/vaga',empregos:'empregos.com.br/vagas',catho:'catho.com.br/vagas',
+  superestagios:'superestagios.com.br/vaga',empregos:'empregos.com.br/vaga',catho:'catho.com.br/vagas',
   infojobs:'infojobs.com.br/vaga-de',solides:'vagas.solides.com.br/vaga',glassdoor:'glassdoor.com.br/job-listing',
-  '99jobs':'99jobs.com/jobs',jooble:'jooble.org/jdp'
+  '99jobs':'99jobs.com',jooble:'jooble.org/jdp'
 };
 
 function sourceForUrl(address) {
@@ -436,11 +436,11 @@ function isListing(id, address) {
     riovagas:/^\/riovagas\/[^/]+\/?$/,
     vagas:/^\/vagas\/v\d+(?:\/[^/]+)?\/?$/,
     superestagios:/^\/vaga\/\d+\/?$/,
-    empregos:/^\/vagas\/[^/]+(?:\/[^/]+)*\/\d+\/?$/,
+    empregos:/^\/(?:vaga\/\d+(?:\/[^/]+)?|vagas\/[^/]+(?:\/[^/]+)*\/\d+)\/?$/,
     catho:/^\/vagas\/[^/]+(?:\/[^/]+)*\/\d+\/?$/,
     infojobs:/^\/vaga-de-[^/]+__\d+\.aspx$/i,
     solides:/^\/(?:vaga|vagas|vacancy|vacancies)\/\d+(?:[-/][^/]+)?\/?$/,
-    '99jobs':/^\/[^/]+\/jobs\/\d+(?:-[^/]+)?\/?$/,
+    '99jobs':/^\/(?:[^/]+\/jobs|vagas)\/\d+(?:-[^/]+)?\/?$/,
     jooble:/^\/(?:jdp|desc)\/-?\d+\/?$/
   };
   if (id==='glassdoor') return /^\/job-listing\//i.test(route) && /^\d+$/.test(address.searchParams.get('jl') || '');
@@ -489,16 +489,18 @@ function publicListings(id, settings) {
     return listings('https://www.superestagios.com.br/vagas/tecnologia-da-informacao',
       ...(saoPaulo?['https://www.superestagios.com.br/vagas/sao-paulo/analise-e-desenvolvimento-de-sistemas']:[]));
   }
-  if (id==='empregos') return listings('https://www.empregos.com.br/vagas/desenvolvedor');
+  if (id==='empregos') return listings('https://www.empregos.com.br/vagas/desenvolvedor-junior','https://www.empregos.com.br/vagas/estagio-informatica');
   if (id==='catho') return listings('https://www.catho.com.br/vagas/desenvolvedor-junior/','https://www.catho.com.br/vagas/estagio-em-desenvolvimento/');
   if (id==='infojobs') return listings(
     'https://www.infojobs.com.br/vagas-de-emprego-desenvolvedor-em-rio-de-janeiro.aspx',
     ...(saoPaulo?['https://www.infojobs.com.br/vagas-de-emprego-desenvolvedor-em-sao-paulo.aspx']:[])
   );
   if (id==='solides') return listings('https://vagas.solides.com.br/vagas/area/tecnologia/todas');
-  if (id==='99jobs') return listings('https://99jobs.com/opportunities/filtered_search','https://www.99jobs.com/');
+  if (id==='99jobs') return ['estágio tecnologia','desenvolvedor','tecnologia'].map((term)=>
+    query('https://99jobs.com/opportunities/filtered_search',{'search[term]':term}));
   if (id==='glassdoor') return [
-    query('https://www.glassdoor.com.br/Vaga/vagas.htm',{'sc.occupationParam':'desenvolvedor júnior'}),
+    query('https://www.glassdoor.com/Job/jobs.htm',{'sc.keyword':'estágio tecnologia',locT:'N',locId:'36'}),
+    query('https://www.glassdoor.com/Job/jobs.htm',{'sc.keyword':'desenvolvedor júnior',locT:'N',locId:'36'}),
     ...(international?[query('https://www.glassdoor.com/Job/jobs.htm',{'sc.keyword':'software engineer intern'})]:[])
   ];
   if (id==='jooble') return listings(
@@ -553,13 +555,32 @@ async function listingResponse(page, id, fetcher) {
   return fetcher(page.url,{signal,headers});
 }
 
+function httpFailure(status) {
+  return Object.assign(new Error('A fonte retornou HTTP '+status),{status});
+}
+
+function listingFailure(message) {
+  return Object.assign(new Error(message),{code:'LISTING_FORMAT'});
+}
+
+function sourceIssue(error) {
+  const {status,code,name}=error;
+  if (Number.isInteger(status)) return 'http-'+status;
+  if (code==='LISTING_FORMAT') return 'format';
+  if (name==='TimeoutError' || name==='AbortError' || ['ETIMEDOUT','UND_ERR_CONNECT_TIMEOUT'].includes(error.cause?.code)) return 'timeout';
+  return 'network';
+}
+
 async function collectListings(page, id, fetcher, now) {
   const response=await listingResponse(page,id,fetcher);
-  if (!response.ok) throw new Error('Portal retornou HTTP '+response.status);
+  if (!response.ok) throw httpFailure(response.status);
   const finalUrl=url(response.url || page.url);
-  if (!finalUrl || sourceForUrl(finalUrl)?.id!==id) throw new Error('O portal redirecionou para fora da pesquisa.');
+  if (!finalUrl || sourceForUrl(finalUrl)?.id!==id) throw listingFailure('O portal redirecionou para fora da pesquisa.');
+  if (/\/(?:login|authwall|checkpoint|captcha|sign-?in)(?:\/|$)/i.test(finalUrl.pathname)) {
+    throw listingFailure('O portal não disponibilizou a lista pública.');
+  }
   const html=await response.text();
-  if (html.length>7*1024*1024) throw new Error('A página de pesquisa excedeu o tamanho previsto.');
+  if (html.length>7*1024*1024) throw listingFailure('A página de pesquisa excedeu o tamanho previsto.');
   const $=load(html,page.rss?{xml:true}:{});
   const found=new Map();
 
@@ -592,7 +613,7 @@ async function collectListings(page, id, fetcher, now) {
   }
   if (page.rss) {
     const items=$('rss channel > item');
-    if (!$('rss channel').length) throw new Error('Feed público não reconhecido.');
+    if (!$('rss channel').length) throw listingFailure('Feed público não reconhecido.');
     items.each((_,entry)=>{
       const node=$(entry);
       add(node.children('link').text(),text(node.children('title').text()),text(node.children('pubDate').text()));
@@ -600,7 +621,7 @@ async function collectListings(page, id, fetcher, now) {
   } else if (id==='indeed') {
     const links=$('a[data-jk], a[href*="/viewjob?jk="], a[href*="/rc/clk?jk="]');
     if (!links.length && !/nenhuma vaga|no jobs found|nao encontramos/.test(norm($('title').text()+' '+$('main').text().slice(0,400)))) {
-      throw new Error('A lista pública do Indeed não está disponível.');
+      throw listingFailure('A lista pública do Indeed não está disponível.');
     }
     links.each((_,anchor)=>{
       const item=$(anchor);
@@ -610,8 +631,8 @@ async function collectListings(page, id, fetcher, now) {
       if (/^[\da-f]{10,32}$/i.test(key || '')) add(finalUrl.origin+'/viewjob?jk='+key,title);
     });
   } else {
-    if (/seguranca|sign in|access denied|acesso bloqueado|verifique se voce|captcha/.test(norm($('title').text()))) {
-      throw new Error('O portal não disponibilizou a lista pública.');
+    if (/seguranca|sign in|access denied|acesso bloqueado|verifique se voce|captcha|just a moment|verify you are human/.test(norm($('title').text()))) {
+      throw listingFailure('O portal não disponibilizou a lista pública.');
     }
     $('a[href]').each((_,anchor)=>{
       const item=$(anchor);
@@ -619,7 +640,7 @@ async function collectListings(page, id, fetcher, now) {
       if (!target || !isListing(id,url(target,finalUrl.href) || finalUrl)) return;
       const container=item.closest('article,li,.base-card');
       const anchorTitle=text(item.attr('title') || item.text());
-      const cardTitle=text(container.find('h2,h3,h4').first().text());
+      const cardTitle=text(item.find('h2,h3,h4').first().text() || container.find('h2,h3,h4').first().text());
       const callToAction=/^(?:ver|abrir|candidatar|apply|saiba mais|inscreva|quero)/.test(norm(anchorTitle));
       const title=(!callToAction && likelyTitle(anchorTitle)?anchorTitle:cardTitle) || (callToAction?'':anchorTitle);
       const submitted=id==='linkedin'?container.find('time[datetime]').first().attr('datetime'):undefined;
@@ -708,6 +729,8 @@ async function scan({settings,user,key='',fetcher,previous=[],now=Date.now(),onP
   const reads=[];
   const direct=new Map();
   const health={};
+  const issues={};
+  const rateLimitedHosts=new Set();
   const groups=[];
   const pending=[];
   const active=new Set();
@@ -721,6 +744,13 @@ async function scan({settings,user,key='',fetcher,previous=[],now=Date.now(),onP
     ...options,signal:options.signal?AbortSignal.any([deadline,options.signal]):deadline
   });
   const discover=fetchWithin(discoveryDeadline);
+  const discoverListings=async (address,options)=>{
+    const host=new URL(address).hostname;
+    if (rateLimitedHosts.has(host)) throw httpFailure(429);
+    const response=await discover(address,options);
+    if (response.status===429) rateLimitedHosts.add(host);
+    return response;
+  };
   const verify=fetchWithin(scanDeadline);
   let providerLimited=false;
   let scrapeBudget=key ? 8 : 2;
@@ -736,6 +766,7 @@ async function scan({settings,user,key='',fetcher,previous=[],now=Date.now(),onP
       if (error.status===429) {
         providerLimited=true;
         health.firecrawl='limited';
+        issues.firecrawl=[...new Set([...(issues.firecrawl || []),'http-429'])];
       }
       throw error;
     });
@@ -805,8 +836,11 @@ async function scan({settings,user,key='',fetcher,previous=[],now=Date.now(),onP
   function track(id,work) {
     const task=work.then((records)=>{
       const successes=records.filter((record)=>!record.error);
+      const problems=[...new Set(records.filter((record)=>record.error).map((record)=>sourceIssue(record.error)))];
+      if (problems.length) issues[id]=[...new Set([...(issues[id] || []),...problems])];
       const jobs=interleave(successes.map((record)=>record.value));
-      if (health[id]!=='limited') health[id]=successes.length===0?'error':successes.length===records.length?'ok':'partial';
+      if (health[id]!=='limited') health[id]=successes.length===0?(problems.length===1 && problems[0]==='http-429'?'limited':'error'):
+        successes.length===records.length?'ok':'partial';
       groups.push(jobs);
       return jobs;
     });
@@ -823,17 +857,17 @@ async function scan({settings,user,key='',fetcher,previous=[],now=Date.now(),onP
   }
 
   if (enabled.includes('gupy')) {
-    track('gupy',mapPool(gupyFeeds(settings),6,streamRead((feed)=>gupy(feed,settings,discover,now))));
+    track('gupy',mapPool(gupyFeeds(settings),6,streamRead((feed)=>gupy(feed,settings,discoverListings,now))));
   }
   for (const id of enabled.filter((item)=>item!=='gupy')) {
     const pages=publicListings(id,settings);
-    if (pages.length) track(id,mapPool(pages,3,streamRead((page)=>collectListings(page,id,discover,now))));
+    if (pages.length) track(id,mapPool(pages,id==='linkedin'?2:3,streamRead((page)=>collectListings(page,id,discoverListings,now))));
   }
   if (settings.firecrawl) {
     const providerSearch=streamRead(async ({query,country})=>{
       if (providerLimited) throw new Error('Limite do Firecrawl');
       const result=await requestFirecrawl('search',{query,limit:key?12:10,country,...(country==='BR'?{location:'Brazil'}:{}),tbs:'qdr:m'});
-      if (!Array.isArray(result.data?.web)) throw new Error('Firecrawl retornou dados incompletos');
+      if (!Array.isArray(result.data?.web)) throw listingFailure('Firecrawl retornou dados incompletos');
       return result.data.web;
     });
     track('firecrawl',mapPool(webQueries(settings,user,enabled,key),2,providerSearch));
@@ -844,7 +878,7 @@ async function scan({settings,user,key='',fetcher,previous=[],now=Date.now(),onP
       const recovery=group.filter((id)=>direct.has(id) && SEARCH_DOMAINS[id]);
       if (!recovery.length) continue;
       const recover=Promise.all(recovery.map(async (id)=>[id,await direct.get(id)])).then(async (answers)=>{
-        const unavailable=answers.filter(([id,items])=>health[id]==='error' || health[id]==='partial'&&!items.length).map(([id])=>id);
+        const unavailable=answers.filter(([id,items])=>['error','limited'].includes(health[id]) || health[id]==='partial'&&!items.length).map(([id])=>id);
         if (!unavailable.length || providerLimited || discoveryDeadline.aborted) return;
         const domains=unavailable.map((id)=>'site:'+SEARCH_DOMAINS[id]).join(' OR ');
         const places=settings.includeSaoPaulo!==false?'("Rio de Janeiro" OR "São Paulo" OR remoto)':'("Rio de Janeiro" OR remoto)';
@@ -870,11 +904,21 @@ async function scan({settings,user,key='',fetcher,previous=[],now=Date.now(),onP
     if (result.kind!=='verified' || !coverageAllows(result.job,settings)) continue;
     const job=result.job;
     const source=job.sourceMeta?.sourceId;
-    if (source && health[source]==='error') health[source]='partial';
+    if (source && ['error','limited'].includes(health[source])) health[source]='partial';
     const identity=fingerprints(job);
     if (identity.some((entry)=>seen.has(entry))) continue;
     for (const entry of identity) seen.add(entry);
     jobs.push(job);
+  }
+  const checkedPortals=new Map();
+  for (const {candidate,result} of results) {
+    const source=sourceForUrl(new URL(candidate.url))?.id;
+    if (source) checkedPortals.set(source,Boolean(checkedPortals.get(source)) || ['verified','filtered','closed'].includes(result.kind));
+  }
+  for (const [source,confirmed] of checkedPortals) {
+    if (confirmed || !['ok','partial'].includes(health[source])) continue;
+    health[source]='partial';
+    issues[source]=[...(issues[source] || []),'unverified'];
   }
   const successful=Object.values(health).some((status)=>status==='ok'||status==='partial');
   const listed=results.some(({result})=>result.kind!=='unverified');
@@ -882,6 +926,7 @@ async function scan({settings,user,key='',fetcher,previous=[],now=Date.now(),onP
     jobs:jobs.sort((a,b)=>b.score-a.score||Date.parse(b.publishedAt)-Date.parse(a.publishedAt)),
     closedUrls,
     sources:health,
+    sourceIssues:issues,
     blocked:(!successful&&!jobs.length) || (!!results.length && !listed),
     partial:Object.values(health).some((status)=>status!=='ok') || results.some(({result})=>result.kind==='unverified')
   };

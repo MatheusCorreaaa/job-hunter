@@ -21,7 +21,7 @@ if (testDataDir) app.setPath('userData',testDataDir);
 if (process.platform==='win32') app.setAppUserModelId(WINDOWS_APP_ID);
 
 const defaultSettings={auto:true,notifications:true,modes:MODES,theme:'system',sourceIds:SOURCE_IDS,sourceCatalogueVersion:SOURCE_CATALOGUE_VERSION,includeSaoPaulo:true,includeInternational:true,firecrawl:true,alexandria:false};
-const blankStatus={lastRun:null,lastSuccess:null,nextRun:null,failures:0,firstFailure:null,persistentAlert:false,lastScheduledSlot:null,scheduledRuns:[],sources:{}};
+const blankStatus={lastRun:null,lastSuccess:null,nextRun:null,failures:0,firstFailure:null,persistentAlert:false,lastScheduledSlot:null,scheduledRuns:[],sources:{},sourceIssues:{}};
 const initial={demo:true,jobs:[],saved:['demo-1'],applications:{},manualApplications:[],alerts:[],seen:[],profile,settings:defaultSettings,status:blankStatus,resumePath:'',encryptedKey:''};
 const homePage=path.join(__dirname,'src','index.html');
 const localPage=pathToFileURL(homePage).href;
@@ -86,7 +86,7 @@ function state() {
   return {
     version:app.getVersion(),demo:data.demo,jobs:data.jobs,saved:data.saved,applications:data.applications,alerts:data.alerts,
     manualApplications:data.manualApplications.map((entry)=>manualJobDetails(entry,data.profile)),profile:data.profile,settings:data.settings,
-    status:{running,lastRun:data.status.lastRun,nextRun:data.status.nextRun,scheduledRuns,sources:data.status.sources,progress:searchProgress}
+    status:{running,lastRun:data.status.lastRun,nextRun:data.status.nextRun,scheduledRuns,sources:data.status.sources,sourceIssues:data.status.sourceIssues,progress:searchProgress}
   };
 }
 
@@ -210,6 +210,7 @@ async function run(scheduled=false) {
   }
   data.status.lastRun=stamp;
   data.status.sources=result.sources || {};
+  data.status.sourceIssues=result.sourceIssues || {};
   for (const job of mergeJobs({...result,jobs:result.jobs.filter((item)=>coverageAllows(item,data.settings))})) {
     discoveredJobs.set(job.id,job);
   }
