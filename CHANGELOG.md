@@ -1,5 +1,9 @@
 # Histórico de mudanças
 
+## 0.4.9 · 24 de novembro de 2026
+
+- A etapa de uma candidatura registrada manualmente aparece ao lado do nome da empresa em **Candidaturas → Vagas do radar**, como nas demais candidaturas.
+
 ## 0.4.8 · 24 de novembro de 2026
 
 - A busca roda em um processo separado, que é encerrado ao final da rodada. O navegador de candidaturas é inicializado quando necessário.

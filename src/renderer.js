@@ -262,14 +262,18 @@ function board() {
     '<div id="jobList"></div><button class="button secondary" id="moreJobs" type="button" aria-controls="jobList" hidden>Mostrar mais vagas</button></section><section id="jobDetail" aria-label="Detalhes da vaga"></section></div>';
 }
 
+function cardCompany(company, application, top) {
+  return '<div class="card-company">'+esc(company)+(top?'<span class="tag">Top '+top+'</span>':'')+
+    (application?'<span class="tag stage-tag">'+esc(stageLabel(application.status))+'</span>':'')+'</div>';
+}
+
 function card(job, top) {
   if (job.manual) return manualTrackingCard(job);
   const saved = isSaved(job.id);
   const application=trackingFor(job.id);
   const source=sourceFor(job.channel);
   return '<article class="card'+(job.id===selected?' active':'')+'" tabindex="0" data-job="'+esc(job.id)+'" aria-label="'+esc(job.title)+'">'+logo(job)+
-    '<div><div class="card-company">'+esc(job.company)+(top?'<span class="tag">Top '+top+'</span>':'')+
-    (application?'<span class="tag stage-tag">'+esc(stageLabel(application.status))+'</span>':'')+'</div><h3>'+esc(job.title)+'</h3>'+
+    '<div>'+cardCompany(job.company,application,top)+'<h3>'+esc(job.title)+'</h3>'+
     '<div class="card-meta"><span>'+icon('map-pin')+esc(job.location)+'</span><span>·</span><span>'+esc(job.mode)+'</span><span>·</span><span>'+ageLabel(job.publishedAt)+'</span></div>'+
     '<div class="card-source">'+(source?sourceImage(source):icon('external-link'))+esc(job.channel || 'Site de carreiras')+'</div>'+
     '<div class="card-tags">'+[job.type,...job.skills.slice(0,4)].map((tag)=>'<span class="tag">'+esc(tag)+'</span>').join('')+'</div></div>'+
@@ -333,10 +337,9 @@ function manualApplicationCard(entry) {
 function manualTrackingCard(entry) {
   const channel=jobChannel(entry);
   return '<article class="card'+(entry.id===selected?' active':'')+'" tabindex="0" data-job="'+esc(entry.id)+'" aria-label="'+esc(entry.title)+'">'+
-    logo(entry)+'<div class="manual-tracking-copy"><div class="card-company">'+esc(entry.company)+'</div>'+
+    logo(entry)+'<div class="manual-tracking-copy">'+cardCompany(entry.company,entry)+
     '<h3>'+esc(entry.title)+'</h3>'+detailMetadata(entry)+(channel?'<div class="card-source">'+channel+'</div>':'')+
-    '<div class="card-tags">'+(entry.type?'<span class="tag">'+esc(entry.type)+'</span>':'')+
-    '<span class="tag stage-tag">'+esc(stageLabel(entry.status))+'</span></div></div>'+
+    (entry.type?'<div class="card-tags"><span class="tag">'+esc(entry.type)+'</span></div>':'')+'</div>'+
     (Number.isFinite(entry.score)?'<div class="card-right"><span class="pill score-pill '+(entry.score>=85?'green':'')+'" title="Aderência estimada">'+entry.score+'%</span></div>':'')+
     '</article>';
 }
