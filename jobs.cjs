@@ -4,6 +4,7 @@ const {createHash} = require('node:crypto');
 const {load} = require('cheerio');
 const {decodeHTML} = require('entities');
 const JOB_SOURCES = require('./src/sources.js');
+const {publicUrl:url,JOB_MODES:MODES} = require('./src/workflow.js');
 const {place,coverageAllows,authorizationNotes} = require('./geography.cjs');
 const {fetch: httpFetch,EnvHttpProxyAgent} = require('undici');
 const {getCACertificates,setDefaultCACertificates} = require('node:tls');
@@ -20,7 +21,6 @@ function publicFetch(address, options) {
 }
 const DAY = 86400000;
 const TIME_ZONE = 'America/Sao_Paulo';
-const MODES = ['Remoto','Híbrido','Presencial'];
 const profile = {
   name:'Perfil de exemplo',
   course:'Análise e Desenvolvimento de Sistemas',
@@ -53,16 +53,6 @@ const otherCore = /\b(react(?: native)?|vue|svelte|next[ .]?js|java|spring boot|
 const optional = /(?:^|\b)(?:diferencia(?:l|is)|desejave(?:l|is)|nice to have|preferred|bonus points|sera um plus|pontos extras|nao obrigatorio)(?:\b|$)/;
 const requirementHeading = /^(?:requisitos(?: e qualificacoes| necessarios| obrigatorios)?|formacao e experiencias desejaveis|qualificacoes|qualifications|requirements(?: and qualifications)?|minimum qualifications|what we (?:require|are looking for|expect)|your (?:skills|profile)|perfil pretendido|o que (?:voce precisa|buscamos|esperamos)|necessario|what you(?:'ll)? need|o que esperamos de voce)(?:\s*:|\s*$)/;
 const neutralHeading = /^(?:responsabilidades|atividades|atribuicoes|beneficios|informacoes adicionais|etapas do processo|sobre |descricao|responsibilities|what you.ll do|additional information|about |benefits)(?:\b|$)/;
-
-function url(value, base) {
-  try {
-    const parsed = new URL(value,base);
-    if (parsed.protocol!=='https:' || parsed.username || parsed.password || parsed.port) return null;
-    const host = parsed.hostname;
-    if (!host.includes('.') || /^(?:\d+\.)+\d+$|:|\.(?:local|internal|localhost|test|invalid|onion)$/.test(host)) return null;
-    return parsed;
-  } catch { return null; }
-}
 
 function canonical(value) {
   const parsed = url(value);
@@ -417,6 +407,24 @@ function sourceForUrl(address) {
     const domains=source.domains || [new URL(source.url).hostname.replace(/^(?:www|br)\./,'')];
     return domains.some((host)=>hostname===host || hostname.endsWith('.'+host));
   });
+}
+
+function manualJobDetails(entry,user,now=Date.now()) {
+  const address=url(entry.site);
+  const portal=JOB_SOURCES.find((source)=>source.id===entry.portalId) || (address?sourceForUrl(address):null);
+  const workplaceType={Remoto:'remote',Híbrido:'hybrid',Presencial:'on-site'}[entry.mode];
+  const region=workplaceType && entry.location?place({jobLocation:entry.location},{workplaceType},''):null;
+  const required=Array.isArray(entry.required)?entry.required:[];
+  const preferred=Array.isArray(entry.preferred)?entry.preferred:[];
+  const match=['Estágio','Júnior'].includes(entry.type) && (required.length || preferred.length || entry.description) ?
+    fit({...entry,required,preferred},user,now):null;
+  return {
+    ...entry,required,preferred,manual:true,regionKey:region?.regionKey,
+    channel:portal?.name || address?.hostname || '',
+    publishedAt:entry.publishedOn?entry.publishedOn+'T12:00:00-03:00':null,
+    skills:match?.skills || [],score:match?.score ?? null,
+    reason:match?.reason.replace('A página cita','O registro menciona')
+  };
 }
 
 function isListing(id, address) {
@@ -889,4 +897,4 @@ function nextDaily(time, now=Date.now()) {
   return today>now ? today : today+DAY;
 }
 
-module.exports={scan,publicFetch,parsePage,coverageAllows,collectListings,publicListings,canonical,url,fingerprints,profile,MODES,fresh,expired,nextDaily,localDate};
+module.exports={scan,publicFetch,parsePage,coverageAllows,collectListings,publicListings,canonical,url,fingerprints,profile,MODES,fresh,expired,nextDaily,localDate,manualJobDetails};

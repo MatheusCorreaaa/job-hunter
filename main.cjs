@@ -1,13 +1,13 @@
 'use strict';
 
 const {app,BrowserWindow,WebContentsView,Tray,Menu,Notification,dialog,ipcMain,session,nativeImage,nativeTheme,safeStorage,clipboard,shell,powerMonitor}=require('electron');
-const {scan,publicFetch,url,fingerprints,profile,MODES,coverageAllows,fresh,expired,localDate}=require('./jobs.cjs');
-const {readFileSync,writeFileSync,renameSync,existsSync}=require('node:fs');
+const {scan,publicFetch,url,fingerprints,profile,MODES,coverageAllows,fresh,expired,localDate,manualJobDetails}=require('./jobs.cjs');
+const {readFileSync,writeFileSync,renameSync,existsSync,statSync}=require('node:fs');
 const path=require('node:path');
 const {pathToFileURL}=require('node:url');
 
 const JOB_SOURCES=require('./src/sources.js');
-const {APPLICATION_STATES,activeApplication,applicationEntry,dueSlot,todaySlots,nextScheduledScan}=require('./src/workflow.js');
+const {APPLICATION_STATES,clean,activeApplication,applicationEntry,saveManualApplication,dueSlot,todaySlots,nextScheduledScan}=require('./src/workflow.js');
 const SOURCE_IDS=JOB_SOURCES.map((source)=>source.id);
 const THEMES=['system','light','dark'];
 const SOURCE_CATALOGUE_VERSION=2;
@@ -22,7 +22,7 @@ if (process.platform==='win32') app.setAppUserModelId(WINDOWS_APP_ID);
 
 const defaultSettings={auto:true,notifications:true,modes:MODES,theme:'system',sourceIds:SOURCE_IDS,sourceCatalogueVersion:SOURCE_CATALOGUE_VERSION,includeSaoPaulo:true,includeInternational:true,firecrawl:true,alexandria:false};
 const blankStatus={lastRun:null,lastSuccess:null,nextRun:null,failures:0,firstFailure:null,persistentAlert:false,lastScheduledSlot:null,scheduledRuns:[],sources:{}};
-const initial={demo:true,jobs:[],saved:['demo-1'],applications:{},alerts:[],seen:[],profile,settings:defaultSettings,status:blankStatus,resumePath:'',encryptedKey:''};
+const initial={demo:true,jobs:[],saved:['demo-1'],applications:{},manualApplications:[],alerts:[],seen:[],profile,settings:defaultSettings,status:blankStatus,resumePath:'',encryptedKey:''};
 const homePage=path.join(__dirname,'src','index.html');
 const localPage=pathToFileURL(homePage).href;
 let data;
@@ -57,7 +57,8 @@ function readState() {
       status.scheduledRuns=[];
       status.lastScheduledSlot=null;
     }
-    return {...initial,...stored,profile:{...profile,...stored.profile},settings,status};
+    const manualApplications=Array.isArray(stored.manualApplications)?stored.manualApplications:[];
+    return {...initial,...stored,profile:{...profile,...stored.profile},settings,status,manualApplications};
   } catch(error) {
     if (error.code!=='ENOENT') {
       try { renameSync(statePath,statePath+'.invalid-'+Date.now()); } catch {}
@@ -84,7 +85,7 @@ function state() {
   const scheduledRuns=slots.map((slot)=>({slot,run:data.status.scheduledRuns.find((entry)=>entry.slot===slot) ?? null}));
   return {
     version:app.getVersion(),demo:data.demo,jobs:data.jobs,saved:data.saved,applications:data.applications,alerts:data.alerts,
-    profile:data.profile,settings:data.settings,
+    manualApplications:data.manualApplications.map((entry)=>manualJobDetails(entry,data.profile)),profile:data.profile,settings:data.settings,
     status:{running,lastRun:data.status.lastRun,nextRun:data.status.nextRun,scheduledRuns,sources:data.status.sources,progress:searchProgress}
   };
 }
@@ -363,8 +364,8 @@ function findJob(id) {
   return data.jobs.find((job)=>job.id===id);
 }
 
-function clean(value,cap) {
-  return typeof value==='string' ? value.trim().slice(0,cap) : '';
+function manualSite(id) {
+  return data.manualApplications.find((entry)=>entry.id===id)?.site;
 }
 
 function updateProfile(payload) {
@@ -387,6 +388,31 @@ function startApplication(id) {
   if (activeApplication(data.applications[id])) return state();
   data.applications[id]=applicationEntry(data.applications[id],{active:true});
   return commit();
+}
+
+function updateManualApplication(payload) {
+  if (payload.portalId && !SOURCE_IDS.includes(payload.portalId)) throw new Error('Selecione um portal válido.');
+  const previous=data.manualApplications;
+  data.manualApplications=saveManualApplication(previous,payload);
+  try { return commit(); }
+  catch (error) {
+    data.manualApplications=previous;
+    throw error;
+  }
+}
+
+async function chooseCompanyLogo() {
+  const choice=await dialog.showOpenDialog(window,{
+    title:'Escolher logo da empresa',properties:['openFile'],filters:[{name:'Imagens PNG ou JPEG',extensions:['png','jpg','jpeg']}]
+  });
+  const filename=choice.filePaths[0];
+  if (choice.canceled || !filename) return {};
+  if (statSync(filename).size>10*1024*1024) throw new Error('Escolha uma imagem de até 10 MB.');
+  const image=nativeImage.createFromBuffer(readFileSync(filename));
+  if (image.isEmpty()) throw new Error('Escolha uma imagem PNG ou JPEG válida.');
+  const {width,height}=image.getSize();
+  const logo=Math.max(width,height)>128?image.resize(width>=height?{width:128}:{height:128}):image;
+  return {logoImage:'data:image/png;base64,'+logo.toPNG().toString('base64')};
 }
 
 const commands={
@@ -451,6 +477,11 @@ const commands={
     if (source) return openBrowser(source.url);
     throw new Error('Vaga ou portal indisponível.');
   },
+  openManualSite:({id})=>{
+    const address=manualSite(id);
+    if (!address) throw new Error('Site da vaga não informado.');
+    return openBrowser(address);
+  },
   closeBrowser,
   browserBack:()=>{
     const history=browser?.webContents.navigationHistory;
@@ -463,9 +494,9 @@ const commands={
     return sendBrowser();
   },
   copyLink:({id})=>{
-    const job=findJob(id);
-    if (!job) throw new Error('Vaga indisponível.');
-    clipboard.writeText(job.applyUrl);
+    const address=findJob(id)?.applyUrl || manualSite(id);
+    if (!address) throw new Error('Link da vaga indisponível.');
+    clipboard.writeText(address);
     return {};
   },
   startApplication:({id})=>startApplication(id),
@@ -477,6 +508,8 @@ const commands={
     return commit();
   },
   updateApplication:({id,status,notes})=>{
+    const manual=data.manualApplications.find((entry)=>entry.id===id);
+    if (manual) return updateManualApplication({...manual,status,notes});
     requireTrackedJob(id);
     const previous=activeApplication(data.applications[id]);
     if (!previous || !APPLICATION_STATES.some((item)=>item.id===status)) throw new Error('Selecione uma etapa válida.');
@@ -492,6 +525,8 @@ const commands={
     data.applications[id]=applicationEntry(previous,{active:false});
     return commit();
   },
+  saveManualApplication:updateManualApplication,
+  chooseCompanyLogo,
   resume:async ()=>{
     const selected=await dialog.showOpenDialog(window,{title:'Selecione seu currículo',properties:['openFile'],filters:[{name:'Currículo em PDF',extensions:['pdf']}]});
     if (!selected.canceled && selected.filePaths[0]) {

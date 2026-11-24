@@ -33,6 +33,10 @@ Ao clicar em **Abrir candidatura**, o formulário abre na janela do Job Hunter e
 
 Em **Candidaturas**, atualize a etapa, registre respostas ou notas e clique em **Salvar acompanhamento**. Use **Devolver ao radar** se quiser tirar a vaga do acompanhamento. A disponibilidade de login dentro da janela depende do portal. O app usa o perfil local para calcular aderência, e cada portal mantém o próprio cadastro.
 
+Para acompanhar uma vaga para a qual você já enviou currículo por fora do aplicativo, abra **Candidaturas → Registro manual**. Informe empresa e cargo. Você também pode escolher uma logo da empresa em PNG ou JPG, indicar o tipo de vaga, o portal, a localidade, a modalidade e as datas de publicação e envio. O aplicativo identifica portais conhecidos pelo link da vaga ou pela sua seleção. A imagem fica salva no computador com o registro.
+
+Preencha os requisitos obrigatórios, os diferenciais e a descrição em campos próprios. Depois de salvar, o registro abre em **Candidaturas → Vagas do radar**, com o link para reabrir a candidatura, o painel de acompanhamento e o botão **Editar registro**. Nas vagas de estágio e júnior com informações suficientes, o painel também mostra uma estimativa de aderência ao perfil.
+
 ## Código
 
 A pasta **codigo-fonte** contém os arquivos do projeto. Para executar a versão editável, use `npm ci` e `npm start` nessa pasta. A versão distribuída em **app** já inclui as dependências necessárias.

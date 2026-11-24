@@ -13,7 +13,7 @@ const sourceFor = (name) => sources.find((source)=>normalize(source.name)===norm
 const sourceImage = (source) => '<span class="source-logo" data-fallback="'+esc(initials(source.name))+'" aria-hidden="true"><img src="assets/sources/'+esc(source.logo)+'" alt=""></span>';
 
 const defaults = {
-  demo:true, jobs:[], saved:['demo-1'], applications:{}, alerts:[], profile:INITIAL_PROFILE,
+  demo:true, jobs:[], saved:['demo-1'], applications:{}, manualApplications:[], alerts:[], profile:INITIAL_PROFILE,
   settings:{auto:true, notifications:true, modes:['Remoto','Híbrido','Presencial'], theme:'system', sourceIds:sources.map((source)=>source.id), includeSaoPaulo:true, includeInternational:true, firecrawl:true},
   status:{running:false, lastRun:null, nextRun:null, sources:{}}
 };
@@ -21,7 +21,10 @@ const defaults = {
 let state = defaults;
 let page = 'radar';
 let selected = null;
+let applicationView = 'radar';
+let selectedManual = null;
 let browserJob = null;
+let browserManual = false;
 let search = '';
 let mode = 'Todas';
 let locationFilter = 'Todas';
@@ -35,10 +38,10 @@ const ageLabel = (value) => {
   const days = Math.max(0, Math.floor((Date.now() - Date.parse(value)) / 86400000));
   return days === 0 ? 'Hoje' : days === 1 ? 'Há 1 dia' : 'Há ' + days + ' dias';
 };
-const initials = (name) => name.trim().split(/\s+/).slice(0,2).map((word)=>word[0]?.toUpperCase()).join('') || 'JH';
+const initials = (name) => name.trim().split(/\s+/).slice(0,2).map((word)=>word[0]?.toUpperCase()).join('') || 'PD';
 const allJobs = () => state.demo ? DEMO_JOBS : state.jobs;
 const isRecent = (job) => Date.parse(job.publishedAt) >= Date.now() - 30 * 86400000 && (!job.validThrough || Date.parse(job.validThrough) >= Date.now());
-const jobRegion = (job) => job.regionKey || (job.mode==='Remoto'?'br':'rio');
+const jobRegion = (job) => job.regionKey || (job.manual?'':job.mode==='Remoto'?'br':'rio');
 const activeCoverage = (job) => state.settings.modes.includes(job.mode) &&
   (jobRegion(job)!=='sp' || state.settings.includeSaoPaulo!==false) &&
   (jobRegion(job)!=='international' || state.settings.includeInternational!==false);
@@ -47,8 +50,10 @@ const currentJobs = () => allJobs().filter((job)=>!trackingFor(job.id) && isRece
 const stageLabel = (id) => APPLICATION_STATES.find((stage)=>stage.id===id)?.label || 'Em preenchimento';
 const scheduleLabel = SCAN_TIMES.map((time)=>time.replace(':00','h')).join(' · ');
 const scheduleTime = new Intl.DateTimeFormat('pt-BR',{timeZone:'America/Sao_Paulo',hour:'2-digit',minute:'2-digit'});
-const compareRecent = (a,b) => Date.parse(b.publishedAt)-Date.parse(a.publishedAt);
-const compareMatch = (a,b) => b.score-a.score || compareRecent(a,b);
+const listingDate = (job) => Date.parse(job.publishedAt || (job.manual?(job.appliedOn || job.createdAt):'')) || 0;
+const updatedTime = (job) => Date.parse(job.manual?job.updatedAt:trackingFor(job.id)?.updatedAt) || 0;
+const compareRecent = (a,b) => listingDate(b)-listingDate(a);
+const compareMatch = (a,b) => (b.score ?? -1)-(a.score ?? -1) || compareRecent(a,b);
 const isSaved = (id) => state.saved.includes(id);
 const jobById = (id) => allJobs().find((job) => job.id === id);
 const checked = (condition) => condition ? ' checked' : '';
@@ -65,10 +70,18 @@ function fallback(action, payload = {}) {
   if (action === 'updateProfile') state = {...state,profile:{...state.profile,...payload}};
   if (['updateSettings','updateSources','updateTheme'].includes(action)) state = {...state,settings:{...state.settings,...payload}};
   if (['startApplication','markApplied','updateApplication','restoreApplication'].includes(action)) {
-    const old=state.applications[payload.id];
-    const changes=action==='restoreApplication'?{active:false}:action==='markApplied'?{active:true,status:'submitted',submittedAt:new Date().toISOString()}:
-      action==='updateApplication'?{active:true,status:payload.status,notes:payload.notes}:{active:true};
-    state={...state,applications:{...state.applications,[payload.id]:applicationEntry(old,changes)}};
+    const manual=action==='updateApplication'&&state.manualApplications.find((entry)=>entry.id===payload.id);
+    if (manual) {
+      state={...state,manualApplications:saveManualApplication(state.manualApplications,{...manual,status:payload.status,notes:payload.notes})};
+    } else {
+      const old=state.applications[payload.id];
+      const changes=action==='restoreApplication'?{active:false}:action==='markApplied'?{active:true,status:'submitted',submittedAt:new Date().toISOString()}:
+        action==='updateApplication'?{active:true,status:payload.status,notes:payload.notes}:{active:true};
+      state={...state,applications:{...state.applications,[payload.id]:applicationEntry(old,changes)}};
+    }
+  }
+  if (action === 'saveManualApplication') {
+    state={...state,manualApplications:saveManualApplication(state.manualApplications,payload)};
   }
   if (action === 'readAlerts') state = {...state,alerts:state.alerts.map((entry)=>({...entry,read:true}))};
   try { localStorage.setItem('hunter-preview',JSON.stringify(state)); } catch {}
@@ -101,6 +114,8 @@ function decorate(root = document) {
 }
 
 function logo(job) {
+  const custom=manualLogo(job.logoImage);
+  if (custom) return '<span class="company-logo"><img class="custom-company-logo" src="'+esc(custom)+'" alt=""></span>';
   const names = {orbit:'orbit',vertex:'triangle',cloud:'cloud',bridge:'workflow'};
   const content = names[job.logo] ? icon(names[job.logo]) : esc(initials(job.company));
   return '<span class="company-logo ' + (names[job.logo] ? job.logo : '') + '">' + content + '</span>';
@@ -127,7 +142,7 @@ function chrome() {
   $('#breadcrumb').textContent = pageNames[page];
   $('#userName').textContent = name;
   $('#initials').textContent = $('#topInitials').textContent = initials(name);
-  const tracked=allJobs().filter((job)=>trackingFor(job.id)).length;
+  const tracked=allJobs().filter((job)=>trackingFor(job.id)).length+state.manualApplications.length;
   $('#applicationCount').textContent=tracked;
   $('#applicationCount').hidden=!tracked;
   $('#savedCount').textContent = allJobs().filter((job)=>isSaved(job.id)).length;
@@ -233,6 +248,7 @@ function board() {
 }
 
 function card(job, top) {
+  if (job.manual) return manualTrackingCard(job);
   const saved = isSaved(job.id);
   const application=trackingFor(job.id);
   const source=sourceFor(job.channel);
@@ -256,55 +272,166 @@ function requirements(items, fallbackText) {
 }
 
 function applicationPanel(job,application) {
+  const stages=job.manual?MANUAL_APPLICATION_STATES:APPLICATION_STATES;
+  const edit=job.manual?'editManualEntry':'restoreApplication';
+  const label=job.manual?'Editar registro':'Devolver ao radar';
+  const date=job.manual?(job.appliedOn?manualSentLabel(job):''):(application.submittedAt?'Envio registrado em '+timeLabel(application.submittedAt):'');
   return '<form class="application-form" id="applicationForm" data-id="'+esc(job.id)+'">'+
     '<div class="application-heading"><h3>Acompanhamento</h3><span class="tag stage-tag">'+esc(stageLabel(application.status))+'</span></div>'+
-    '<label>Etapa<select name="status">'+options(APPLICATION_STATES.map((item)=>[item.id,item.label]),application.status)+'</select></label>'+
+    '<label>Etapa<select name="status">'+options(stages.map((item)=>[item.id,item.label]),application.status)+'</select></label>'+
     '<label>Notas e respostas<textarea name="notes" maxlength="4000" rows="3" placeholder="Ex.: recebi um e-mail e a entrevista ficou para terça.">'+esc(application.notes)+'</textarea></label>'+
     '<div class="application-actions"><button class="button primary" type="submit">'+icon('check')+' Salvar acompanhamento</button>'+
-    '<button class="button secondary" type="button" data-action="restoreApplication" data-id="'+esc(job.id)+'">'+icon('arrow-left')+' Devolver ao radar</button></div>'+
-    (application.submittedAt?'<small>Envio registrado em '+esc(timeLabel(application.submittedAt))+'</small>':'')+'</form>';
+    '<button class="button secondary" type="button" data-action="'+edit+'" data-id="'+esc(job.id)+'">'+icon(job.manual?'file-text':'arrow-left')+' '+label+'</button></div>'+
+    (date?'<small>'+esc(date)+'</small>':'')+'</form>';
+}
+
+function applicationTabs() {
+  return '<nav class="application-tabs" aria-label="Tipo de candidatura">'+
+    [['radar','Vagas do radar','radar'],['manual','Registro manual','clipboard-list']].map(([view,label,symbol])=>
+      '<button class="button secondary" type="button" data-application-view="'+view+'" aria-pressed="'+(view===applicationView)+'">'+
+      icon(symbol)+esc(label)+'</button>').join('')+'</nav>';
+}
+
+function manualSentLabel(entry) {
+  return entry.appliedOn?'Enviada em '+dateLabel(entry.appliedOn+'T12:00:00-03:00'):'Data de envio não informada';
+}
+
+function jobChannel(job) {
+  const source=sourceFor(job.channel) || sources.find((item)=>item.id===job.portalId);
+  const label=source?.name || job.channel || publicUrl(job.site)?.hostname;
+  return label?(source?sourceImage(source):icon('globe'))+esc(label):'';
+}
+
+function detailMetadata(job) {
+  const date=job.manual && !job.publishedAt?manualSentLabel(job):dateLabel(job.publishedAt)+(job.dateEstimated?' (aprox.)':'');
+  const fields=[[job.location,'map-pin'],[job.mode,'monitor'],[date,'calendar-days']];
+  return '<div class="card-meta detail-meta">'+fields.filter(([value])=>value).map(([value,symbol])=>
+    '<span>'+icon(symbol)+esc(value)+'</span>').join('')+'</div>';
+}
+
+function manualApplicationCard(entry) {
+  return '<button class="manual-record" type="button" data-manual-entry="'+esc(entry.id)+'" aria-pressed="'+(selectedManual===entry.id)+'">'+
+    logo(entry)+'<span class="manual-record-copy"><strong>'+esc(entry.title)+'</strong><span>'+esc(entry.company)+'</span>'+
+    '<small>'+esc(manualSentLabel(entry))+'</small></span><span class="tag stage-tag">'+esc(stageLabel(entry.status))+'</span></button>';
+}
+
+function manualTrackingCard(entry) {
+  const channel=jobChannel(entry);
+  return '<article class="card'+(entry.id===selected?' active':'')+'" tabindex="0" data-job="'+esc(entry.id)+'" aria-label="'+esc(entry.title)+'">'+
+    logo(entry)+'<div class="manual-tracking-copy"><div class="card-company">'+esc(entry.company)+'</div>'+
+    '<h3>'+esc(entry.title)+'</h3>'+detailMetadata(entry)+(channel?'<div class="card-source">'+channel+'</div>':'')+
+    '<div class="card-tags">'+(entry.type?'<span class="tag">'+esc(entry.type)+'</span>':'')+
+    '<span class="tag stage-tag">'+esc(stageLabel(entry.status))+'</span></div></div>'+
+    (Number.isFinite(entry.score)?'<div class="card-right"><span class="pill score-pill '+(entry.score>=85?'green':'')+'" title="Aderência estimada">'+entry.score+'%</span></div>':'')+
+    '</article>';
+}
+
+function setManualLogo(form,value) {
+  form.elements.logoImage.value=value;
+  form.querySelector('#manualLogoPreview').innerHTML=logo({logoImage:value,company:form.elements.company.value || 'Empresa'});
+  form.querySelector('[data-action="removeManualLogo"]').hidden=!value;
+}
+
+function manualApplicationsPage() {
+  const records=state.manualApplications;
+  const record=records.find((entry)=>entry.id===selectedManual);
+  const value=(field)=>esc(record?.[field] || '');
+  const lines=(field)=>esc((record?.[field] || []).join('\n'));
+  const portalOptions=[['','Detectar pelo link'],...sources.map(({id,name})=>[id,name])];
+  return '<div class="settings-grid manual-applications"><section class="panel">'+
+    '<div class="manual-panel-heading"><h2>Candidaturas cadastradas</h2>'+
+    '<button class="button secondary" type="button" data-manual-entry="">'+icon('file-text')+' Nova candidatura</button></div>'+
+    (records.length?'<div class="manual-list">'+records.map(manualApplicationCard).join('')+'</div>':
+      '<p class="manual-empty">Adicione uma vaga para a qual você já enviou currículo.</p>')+'</section>'+
+    '<section class="panel"><h2 id="manualFormTitle" tabindex="-1">'+(record?'Editar candidatura':'Nova candidatura')+'</h2>'+
+    '<form class="form" id="manualApplicationForm" aria-labelledby="manualFormTitle" data-id="'+value('id')+'">'+
+    '<label>Empresa<input name="company" maxlength="120" required value="'+value('company')+'"></label>'+
+    '<div class="manual-logo-field"><span id="manualLogoPreview">'+logo({logoImage:record?.logoImage,company:record?.company || 'Empresa'})+'</span>'+
+    '<input type="hidden" name="logoImage" value="'+esc(manualLogo(record?.logoImage))+'">'+
+    '<button class="button secondary" type="button" data-action="chooseCompanyLogo">'+icon('upload')+' Escolher logo da empresa</button>'+
+    '<button class="button secondary" type="button" data-action="removeManualLogo"'+(record?.logoImage?'':' hidden')+'>Remover logo</button></div>'+
+    '<label>Cargo<input name="title" maxlength="140" required value="'+value('title')+'"></label>'+
+    '<div class="manual-form-row"><label>Tipo de vaga<select name="type">'+options([['','Não informado'],...JOB_TYPES.map((type)=>[type,type])],record?.type || '')+'</select></label>'+
+    '<label>Portal de origem<select name="portalId">'+options(portalOptions,record?.portalId || '')+'</select></label></div>'+
+    '<label><span>Site da vaga <small>(opcional)</small></span><input name="site" inputmode="url" maxlength="2048" placeholder="https://empresa.com/vaga" value="'+value('site')+'"></label>'+
+    '<div class="manual-form-row"><label>Localidade<input name="location" maxlength="160" placeholder="São Paulo, SP" value="'+value('location')+'"></label>'+
+    '<label>Modalidade<select name="mode">'+options([['','Não informada'],...JOB_MODES.map((mode)=>[mode,mode])],record?.mode || '')+'</select></label></div>'+
+    '<div class="manual-form-row"><label>Data da publicação<input name="publishedOn" type="date" value="'+value('publishedOn')+'"></label>'+
+    '<label>Data do envio<input name="appliedOn" type="date" value="'+value('appliedOn')+'"></label></div>'+
+    '<label>Requisitos obrigatórios<textarea name="required" maxlength="5000" rows="3" placeholder="Um requisito por linha">'+lines('required')+'</textarea></label>'+
+    '<label>Diferenciais<textarea name="preferred" maxlength="5000" rows="3" placeholder="Um diferencial por linha">'+lines('preferred')+'</textarea></label>'+
+    '<label>Descrição da vaga<textarea name="description" maxlength="5000" rows="4" placeholder="Atividades e detalhes do anúncio">'+value('description')+'</textarea></label>'+
+    '<label>Etapa<select name="status">'+options(MANUAL_APPLICATION_STATES.map(({id,label})=>[id,label]),record?.status || 'submitted')+'</select></label>'+
+    '<label>Notas e respostas<textarea name="notes" maxlength="4000" rows="3" placeholder="Ex.: enviei pelo site da empresa e estou aguardando retorno">'+value('notes')+'</textarea></label>'+
+    '<button class="button primary" type="submit">'+icon('check')+' '+(record?'Salvar alterações':'Salvar candidatura')+'</button></form></section></div>';
+}
+
+function matchPanel(job) {
+  const scored=Number.isFinite(job.score);
+  const title=job.manual && scored?'Aderência estimada ao seu perfil':'Aderência ao seu perfil';
+  const reason=job.reason || 'A estimativa depende do cargo, do tipo de vaga e dos requisitos ou da descrição.';
+  return '<div class="match'+(scored?'':' match-unscored')+'">'+
+    (scored?'<div class="gauge" style="--score:'+job.score+'" aria-label="'+job.score+' por cento"><strong>'+job.score+'<sup>%</sup></strong></div>':'')+
+    '<div><div class="match-title">'+icon('sparkles')+' '+title+'</div><p>'+esc(reason)+'</p></div></div>';
+}
+
+function applicationLink(job,application) {
+  if (job.manual && !job.site) return '<div class="detail-foot"><small>Site da vaga não informado.</small></div>';
+  const action=job.manual?'openManualSite':'apply';
+  const caption=job.manual?esc(job.site):job.demo?'Exemplo ilustrativo':'Formulário do portal dentro do Job Hunter';
+  return '<div class="detail-foot"><button class="button primary" data-action="'+action+'" data-id="'+esc(job.id)+'">'+
+    icon('external-link')+' '+(application?'Reabrir candidatura':'Abrir candidatura')+'</button>'+
+    '<small'+(job.manual?' class="manual-site"':'')+'>'+caption+'</small></div>';
 }
 
 function details(job) {
   if (!job) return empty('panel-right','Detalhes da vaga','Selecione uma oportunidade para ver a análise do perfil.');
   const saved = isSaved(job.id);
-  const posted = dateLabel(job.publishedAt)+(job.dateEstimated?' (aprox.)':'');
-  const source = sourceFor(job.channel);
-  const channel = (source ? sourceImage(source) : '') + esc(job.channel);
-  const expired = !isRecent(job);
-  const application=trackingFor(job.id);
-  const apply='<div class="detail-foot"><button class="button primary" data-action="apply" data-id="'+esc(job.id)+'">'+icon('external-link')+' '+(application?'Reabrir candidatura':'Abrir candidatura')+'</button><small>'+(job.demo?'Exemplo ilustrativo':'Formulário do portal dentro do Job Hunter')+'</small></div>';
-  return '<article class="detail"><div class="detail-top"><div class="detail-bar"><span class="pill '+(job.demo?'amber':expired?'amber':'green')+'">'+icon(job.demo?'flask-conical':expired?'clock-3':'badge-check')+(job.demo?' Vaga de exemplo':expired?' Fora do período de busca':' Verificada na fonte')+
-    '</span><div class="detail-actions">'+iconButton(saved?'bookmark-check':'bookmark',saved?'Remover dos salvos':'Salvar vaga','toggleSaved',job.id,saved?'is-saved':'')+
+  const channel=jobChannel(job);
+  const expired=!job.manual && !isRecent(job);
+  const application=job.manual?job:trackingFor(job.id);
+  const badge=job.manual?'<span class="pill">'+icon('clipboard-list')+' Registro manual</span>':
+    '<span class="pill '+(job.demo || expired?'amber':'green')+'">'+icon(job.demo?'flask-conical':expired?'clock-3':'badge-check')+
+    (job.demo?' Vaga de exemplo':expired?' Fora do período de busca':' Verificada na fonte')+'</span>';
+  const actions=job.manual?(job.site?iconButton('copy','Copiar link da vaga','copy',job.id):''):
+    iconButton(saved?'bookmark-check':'bookmark',saved?'Remover dos salvos':'Salvar vaga','toggleSaved',job.id,saved?'is-saved':'')+
     (job.demo?'':iconButton('file-text','Abrir anúncio original','original',job.id)+iconButton('copy','Copiar link direto','copy',job.id))+
-    (application?'':iconButton('clipboard-check','Marcar candidatura como enviada','markJobApplied',job.id))+'</div></div><div class="detail-company">'+logo(job)+esc(job.company)+'<span class="detail-source">'+channel+'</span></div>'+
-    '<h2>'+esc(job.title)+'</h2><div class="card-meta detail-meta"><span>'+icon('map-pin')+esc(job.location)+'</span><span>'+icon('monitor')+esc(job.mode)+'</span><span>'+icon('calendar-days')+posted+'</span></div></div>'+
-    '<div class="detail-body"><div class="match"><div class="gauge" style="--score:'+job.score+'" aria-label="'+job.score+' por cento"><strong>'+job.score+'<sup>%</sup></strong></div><div><div class="match-title">'+icon('sparkles')+' Aderência ao seu perfil</div><p>'+esc(job.reason)+'</p></div></div>'+apply+(application&&page==='applications'?applicationPanel(job,application):'')+
-    accordion('Requisitos obrigatórios','list-checks',requirements(job.required,'A página não informou requisitos obrigatórios de forma estruturada.'),true)+
-    accordion('Diferenciais','sparkles',requirements(job.preferred,'A página não informou diferenciais.'))+
+    (application?'':iconButton('clipboard-check','Marcar candidatura como enviada','markJobApplied',job.id));
+  const description=job.description || (job.manual?'Descrição não informada.':'Consulte o anúncio original para ler a descrição completa.');
+  return '<article class="detail'+(job.manual?' manual-detail':'')+'"><div class="detail-top"><div class="detail-bar">'+badge+
+    '<div class="detail-actions">'+actions+'</div></div><div class="detail-company">'+logo(job)+esc(job.company)+
+    (channel?'<span class="detail-source">'+channel+'</span>':'')+'</div>'+
+    '<h2'+(job.manual?' id="manualDetailTitle" tabindex="-1"':'')+'>'+esc(job.title)+'</h2>'+detailMetadata(job)+
+    (job.manual && job.type?'<div class="card-tags"><span class="tag">'+esc(job.type)+'</span></div>':'')+'</div>'+
+    '<div class="detail-body">'+matchPanel(job)+applicationLink(job,application)+
+    (application && page==='applications'?applicationPanel(job,application):'')+
+    accordion('Requisitos obrigatórios','list-checks',requirements(job.required || [],job.manual?'Nenhum requisito obrigatório informado.':'A página não informou requisitos obrigatórios de forma estruturada.'),true)+
+    accordion('Diferenciais','sparkles',requirements(job.preferred || [],job.manual?'Nenhum diferencial informado.':'A página não informou diferenciais.'))+
     (job.workEligibility?.length?accordion('Autorização de trabalho','globe',requirements(job.workEligibility,'')):'')+
-    accordion('Sobre a vaga','file-text','<p>'+esc(job.description || 'Consulte o anúncio original para ler a descrição completa.')+'</p>'+
+    accordion('Sobre a vaga','file-text','<p'+(job.manual?' class="manual-description"':'')+'>'+esc(description)+'</p>'+
     (job.validThrough?'<p>Prazo de candidatura '+dateLabel(job.validThrough)+'</p>':'')+(job.verifiedAt?'<p>Verificada em '+timeLabel(job.verifiedAt)+'</p>':''))+
     '</div></article>';
 }
 
 function results() {
   const base = page==='saved' ? allJobs().filter((job)=>isSaved(job.id)) :
-    page==='applications' ? allJobs().filter((job)=>trackingFor(job.id)) : currentJobs();
-  const scores = [...base].sort(compareMatch).slice(0,3);
+    page==='applications' ? [...allJobs().filter((job)=>trackingFor(job.id)),...state.manualApplications.map((entry)=>({...entry,manual:true}))] : currentJobs();
+  const scores = page==='radar'?[...base].sort(compareMatch).slice(0,3):[];
   const query = normalize(search.trim());
   const jobs = base.filter((job)=>
-    (!query || normalize([job.title,job.company,job.location,job.channel,...job.skills].join(' ')).includes(query)) &&
+    (!query || normalize([job.title,job.company,job.location,job.channel,job.site,...(job.skills || [])].join(' ')).includes(query)) &&
     (mode==='Todas' || mode===job.mode || mode===job.type) &&
     (locationFilter==='Todas' || locationFilter===jobRegion(job))
-  ).sort((a,b)=>sort==='updated' ? Date.parse(trackingFor(b.id)?.updatedAt ?? 0)-Date.parse(trackingFor(a.id)?.updatedAt ?? 0) :
+  ).sort((a,b)=>sort==='updated' ? updatedTime(b)-updatedTime(a) :
     sort==='recent' ? compareRecent(a,b) : compareMatch(a,b));
-  if (!jobs.some((job)=>job.id===selected)) selected = jobs[0]?.id ?? null;
-  $('#resultSummary').textContent = state.status.running && !base.length && page==='radar' ? 'Busca em andamento' : jobs.length+' '+(jobs.length===1?'vaga':'vagas')+(state.demo?' de exemplo':'')+' · '+(sort==='updated'?'última atualização':sort==='recent'?'mais recentes':'melhor aderência');
+  const displayed=jobs.find((job)=>job.id===selected) || jobs[0];
+  selected=displayed?.id ?? null;
+  const sample=state.demo && (page!=='applications' || base.every((job)=>job.demo));
+  $('#resultSummary').textContent = state.status.running && !base.length && page==='radar' ? 'Busca em andamento' : jobs.length+' '+(jobs.length===1?'vaga':'vagas')+(sample?' de exemplo':'')+' · '+(sort==='updated'?'última atualização':sort==='recent'?'mais recentes':'melhor aderência');
   $('#jobList').innerHTML = jobs.length ? jobs.map((job)=>card(job,page==='radar'?scores.findIndex((item)=>item.id===job.id)+1:0)).join('') :
     empty('search',state.status.running && !base.length && page==='radar'?'Consultando anúncios':base.length?'Nenhum resultado com esses filtros':page==='saved'?'Sua lista está vazia':page==='applications'?'Nenhuma candidatura registrada':'Seu radar ainda está vazio',
       state.status.running && !base.length && page==='radar'?'Verificando data, requisitos e candidatura na fonte.':base.length?'Ajuste a modalidade, a localidade ou o termo de busca.':page==='saved'?'Use o marcador para salvar uma vaga.':page==='applications'?'Abra uma vaga para acompanhar o preenchimento, ou marque uma candidatura que já enviou.':'Vagas verificadas aparecem aqui quando a busca encontra novas correspondências.');
-  $('#jobDetail').innerHTML = details(jobById(selected));
+  $('#jobDetail').innerHTML = details(displayed);
 }
 
 function profilePage() {
@@ -382,8 +509,15 @@ function settingsPage() {
 function render() {
   chrome();
   const content = $('#content');
-  if (['radar','saved','applications'].includes(page)) {
-    content.innerHTML=(page==='radar'?hero():title(pageNames[page],page==='saved'?'Oportunidades que você quer revisar.':'Acompanhe os formulários que abriu, as respostas e os próximos passos.'))+board();
+  if (page==='applications') {
+    const manual=applicationView==='manual';
+    content.innerHTML=title('Candidaturas','Acompanhe suas vagas e registre currículos enviados antes de usar o Job Hunter.')+
+      applicationTabs()+(manual?manualApplicationsPage():board());
+    if (!manual) results();
+    return;
+  }
+  if (page==='radar' || page==='saved') {
+    content.innerHTML=(page==='radar'?hero():title(pageNames[page],'Oportunidades que você quer revisar.'))+board();
     results();
   } else content.innerHTML={profile:profilePage,sources:sourcesPage,settings:settingsPage}[page]();
 }
@@ -391,6 +525,7 @@ function render() {
 function navigate(nextPage,id=null) {
   if (!pageNames[nextPage]) return;
   page=nextPage;
+  if (nextPage==='applications' && id) applicationView='radar';
   selected=id;
   sort=nextPage==='applications'?'updated':'match';
   search='';
@@ -418,10 +553,13 @@ function showBrowser(data) {
   $('#browserAddress').textContent=address || 'Carregando…';
   $('#browserError').hidden=!data.open || !data.failed;
   $('#browserBack').disabled=!data.canGoBack;
-  $('#browserReturnLabel').textContent=browserJob?'Voltar a Candidaturas':'Voltar ao Job Hunter';
+  $('#browserReturnLabel').textContent=browserJob || browserManual?'Voltar a Candidaturas':'Voltar ao Job Hunter';
   $('#markApplied').hidden=!browserJob || data.failed || data.loading || !!trackingFor(browserJob)?.submittedAt;
   $('#resumeFolder').hidden=data.failed || !state.profile.resumeName;
-  if (!data.open) browserJob=null;
+  if (!data.open) {
+    browserJob=null;
+    browserManual=false;
+  }
 }
 
 async function action(name, id) {
@@ -434,6 +572,18 @@ async function action(name, id) {
   }
   if (name==='closeDialog') { $('#dialog').close(); return; }
   if (name==='alertJob') { $('#dialog').close(); jumpJob(id); return; }
+  if (name==='editManualEntry') {
+    selectedManual=id;
+    applicationView='manual';
+    render();
+    $('#manualFormTitle')?.focus();
+    return;
+  }
+  if (name==='removeManualLogo') {
+    const form=$('#manualApplicationForm');
+    if (form) setManualLogo(form,'');
+    return;
+  }
   if (name==='toggleSaved' && job) {
     await request(name,{id});
     render();
@@ -459,6 +609,19 @@ async function action(name, id) {
     return;
   }
   if (!desktop) { desktopRequired(); return; }
+  if (name==='chooseCompanyLogo') {
+    const form=$('#manualApplicationForm');
+    if (!form) return;
+    const result=await request(name);
+    if (form.isConnected && result.logoImage) setManualLogo(form,result.logoImage);
+    return;
+  }
+  if (name==='openManualSite') {
+    browserManual=true;
+    try { await request('openManualSite',{id}); }
+    catch (error) { browserManual=false; throw error; }
+    return;
+  }
   if (name==='enable' || name==='demo' || name==='scan') {
     await request(name);
     navigate('radar');
@@ -476,9 +639,9 @@ async function action(name, id) {
       throw error;
     }
   }
-  if (name==='copy' && job) {
+  if (name==='copy' && (job || state.manualApplications.some((entry)=>entry.id===id))) {
     await request('copyLink',{id});
-    notify('Link de candidatura copiado');
+    notify('Link da vaga copiado');
   }
   if (name==='resume' || name==='removeResume') {
     await request(name);
@@ -520,6 +683,21 @@ document.addEventListener('click',(event)=>{
   if (button) { action(button.dataset.action,button.dataset.id).catch((error)=>notify(error.message)); return; }
   const nav=event.target.closest('[data-page], .brand');
   if (nav) { event.preventDefault(); navigate(nav.dataset.page || 'radar'); return; }
+  const view=event.target.closest('[data-application-view]');
+  if (view) {
+    if (view.dataset.applicationView===applicationView) return;
+    applicationView=view.dataset.applicationView;
+    render();
+    document.querySelector('[data-application-view][aria-pressed="true"]')?.focus();
+    return;
+  }
+  const entry=event.target.closest('[data-manual-entry]');
+  if (entry) {
+    selectedManual=entry.dataset.manualEntry || null;
+    render();
+    $(selectedManual?'#manualFormTitle':'#manualApplicationForm [name="company"]')?.focus();
+    return;
+  }
   const filter=event.target.closest('[data-mode]');
   if (filter) {
     mode=filter.dataset.mode;
@@ -573,6 +751,25 @@ $('#content').addEventListener('submit',async (event)=>{
   const form=event.target;
   const data=new FormData(form);
   try {
+    if (form.id==='manualApplicationForm') {
+      const submit=form.querySelector('[type="submit"]');
+      if (submit.disabled) return;
+      const id=form.dataset.id || crypto.randomUUID();
+      form.dataset.id=id;
+      submit.disabled=true;
+      try {
+        await request('saveManualApplication',{...Object.fromEntries(data),id});
+        if (form.isConnected) {
+          selectedManual=id;
+          navigate('applications',id);
+          $('#manualDetailTitle')?.focus({preventScroll:true});
+        }
+        notify('Candidatura manual salva');
+      } finally {
+        submit.disabled=false;
+      }
+      return;
+    }
     if (form.id==='profileForm') {
       await request('updateProfile',{...Object.fromEntries(data),skills:data.get('skills').split(',').map((skill)=>skill.trim()).filter(Boolean)});
     }
@@ -622,6 +819,10 @@ document.addEventListener('error',(event)=>{
 },true);
 desktop?.onState((updated)=>{
   state=updated;
+  if (page==='applications' && applicationView==='manual') {
+    chrome();
+    return;
+  }
   if (['radar','applications','saved'].includes(page) && !document.activeElement?.matches('input,textarea,select') && !$('.dropdown.is-open')) render();
   else if (page==='sources' && !$('#sourcesForm')?.contains(document.activeElement)) render();
   else chrome();
