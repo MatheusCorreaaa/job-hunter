@@ -7,6 +7,7 @@ const iconButton = (name, label, action, id = '', extra = '') => '<button class=
 const normalize = (value) => String(value ?? '').normalize('NFD').replace(/\p{Diacritic}/gu,'').toLowerCase();
 const pageNames = {radar:'Radar de vagas',saved:'Vagas salvas',applications:'Candidaturas',profile:'Meu perfil',sources:'Fontes e contas',settings:'Configurações'};
 const sources = JOB_SOURCES;
+const radarSources=sources.filter((source)=>source.searchable!==false);
 const systemDark = window.matchMedia('(prefers-color-scheme: dark)');
 const isDark = () => state.settings.theme === 'dark' || (state.settings.theme !== 'light' && systemDark.matches);
 const sourceFor = (name) => sources.find((source)=>normalize(source.name)===normalize(name));
@@ -14,7 +15,7 @@ const sourceImage = (source) => '<span class="source-logo" data-fallback="'+esc(
 
 const defaults = {
   demo:true, jobs:[], saved:['demo-1'], applications:{}, manualApplications:[], alerts:[], profile:INITIAL_PROFILE,
-  settings:{auto:true, notifications:true, modes:['Remoto','Híbrido','Presencial'], theme:'system', sourceIds:sources.map((source)=>source.id), includeSaoPaulo:true, includeInternational:true, firecrawl:true},
+  settings:{auto:true, notifications:true, modes:['Remoto','Híbrido','Presencial'], theme:'system', sourceIds:radarSources.map((source)=>source.id), includeSaoPaulo:true, includeInternational:true, firecrawl:true},
   status:{running:false, lastRun:null, nextRun:null, sources:{}}
 };
 
@@ -30,9 +31,13 @@ let mode = 'Todas';
 let locationFilter = 'Todas';
 let sort = 'match';
 let toastTimer;
+const RESULT_BATCH_SIZE=30;
+let resultLimit=RESULT_BATCH_SIZE;
 const desktop = window.hunter;
-const dateLabel = (value) => value ? new Intl.DateTimeFormat('pt-BR',{timeZone:'America/Sao_Paulo',day:'2-digit',month:'short',year:'numeric'}).format(new Date(value)) : 'Data indisponível';
-const timeLabel = (value) => value ? new Intl.DateTimeFormat('pt-BR',{timeZone:'America/Sao_Paulo',day:'2-digit',month:'2-digit',hour:'2-digit',minute:'2-digit'}).format(new Date(value)) : '';
+const dateFormatter=new Intl.DateTimeFormat('pt-BR',{timeZone:'America/Sao_Paulo',day:'2-digit',month:'short',year:'numeric'});
+const timeFormatter=new Intl.DateTimeFormat('pt-BR',{timeZone:'America/Sao_Paulo',day:'2-digit',month:'2-digit',hour:'2-digit',minute:'2-digit'});
+const dateLabel = (value) => value ? dateFormatter.format(new Date(value)) : 'Data indisponível';
+const timeLabel = (value) => value ? timeFormatter.format(new Date(value)) : '';
 const ageLabel = (value) => {
   if (!value) return 'Data indisponível';
   const days = Math.max(0, Math.floor((Date.now() - Date.parse(value)) / 86400000));
@@ -150,7 +155,7 @@ function chrome() {
   $('#modePill').classList.toggle('live',!state.demo && state.settings.auto);
   $('#modePill').lastChild.textContent = state.demo ? 'Demonstração' : state.status.running ? 'Buscando' : state.settings.auto ? 'Radar ativo' : 'Radar pausado';
   $('#monitorTitle').textContent = state.demo ? 'Modo demonstração' : state.status.running ? 'Busca em andamento' : state.settings.auto ? 'Monitoramento ativo' : 'Monitoramento pausado';
-  $('#monitorCopy').textContent = state.demo ? 'Explore vagas fictícias' : state.status.running ? (state.status.progress?.queued ? state.status.progress.checked+' / '+state.status.progress.queued+' anúncios checados' : 'Consultando fontes em paralelo') : state.status.nextRun ? 'Próxima busca ' + timeLabel(state.status.nextRun) : 'Busca manual disponível';
+  updateMonitor();
   const schedule=$('#dailySchedule');
   if (schedule) schedule.innerHTML=scheduleDetails();
   document.querySelectorAll('.nav').forEach((button)=>{
@@ -158,6 +163,13 @@ function chrome() {
     if (button.dataset.page === page) button.setAttribute('aria-current','page');
     else button.removeAttribute('aria-current');
   });
+}
+
+function updateMonitor() {
+  const progress=state.status.progress;
+  $('#monitorCopy').textContent=state.demo?'Explore vagas fictícias':
+    state.status.running?(progress?.queued?progress.checked+' / '+progress.queued+' anúncios checados':'Consultando fontes em paralelo'):
+    state.status.nextRun?'Próxima busca '+timeLabel(state.status.nextRun):'Busca manual disponível';
 }
 
 function hero() {
@@ -236,6 +248,8 @@ function pickDropdown(menu,option) {
     if (chosen) item.insertAdjacentHTML('beforeend',icon('check'));
   });
   toggleDropdown(menu,false,true);
+  selected=null;
+  resultLimit=RESULT_BATCH_SIZE;
   results();
 }
 
@@ -244,7 +258,8 @@ function board() {
   const toolbar = '<div class="result-tools"><label class="search">'+icon('search')+'<input id="search" type="search" aria-label="Buscar na lista" placeholder="Cargo, empresa ou tecnologia" value="'+esc(search)+'"></label>'+
     dropdown('locationFilter',locationFilter)+dropdown('sort',sort,orders)+'</div>'+
     '<div class="filters" aria-label="Modalidade">'+['Todas','Remoto','Híbrido','Presencial','Estágio','Júnior'].map((item)=>'<button class="filter'+(item===mode?' active':'')+'" aria-pressed="'+(item===mode)+'" data-mode="'+item+'">'+item+'</button>').join('')+'</div>';
-  return '<div class="grid"><section class="results" aria-label="Lista de vagas"><div class="section-head"><div><h2>'+ (page==='radar'?'Oportunidades':pageNames[page])+'</h2><p id="resultSummary"></p></div></div>'+toolbar+'<div id="jobList"></div></section><section id="jobDetail" aria-label="Detalhes da vaga"></section></div>';
+  return '<div class="grid"><section class="results" aria-label="Lista de vagas"><div class="section-head"><div><h2>'+ (page==='radar'?'Oportunidades':pageNames[page])+'</h2><p id="resultSummary"></p></div></div>'+toolbar+
+    '<div id="jobList"></div><button class="button secondary" id="moreJobs" type="button" aria-controls="jobList" hidden>Mostrar mais vagas</button></section><section id="jobDetail" aria-label="Detalhes da vaga"></section></div>';
 }
 
 function card(job, top) {
@@ -424,13 +439,16 @@ function results() {
     (locationFilter==='Todas' || locationFilter===jobRegion(job))
   ).sort((a,b)=>sort==='updated' ? updatedTime(b)-updatedTime(a) :
     sort==='recent' ? compareRecent(a,b) : compareMatch(a,b));
-  const displayed=jobs.find((job)=>job.id===selected) || jobs[0];
+  const selectedIndex=jobs.findIndex((job)=>job.id===selected);
+  const displayed=jobs[selectedIndex] || jobs[0];
   selected=displayed?.id ?? null;
+  const visible=Math.max(resultLimit,selectedIndex+1);
   const sample=state.demo && (page!=='applications' || base.every((job)=>job.demo));
   $('#resultSummary').textContent = state.status.running && !base.length && page==='radar' ? 'Busca em andamento' : jobs.length+' '+(jobs.length===1?'vaga':'vagas')+(sample?' de exemplo':'')+' · '+(sort==='updated'?'última atualização':sort==='recent'?'mais recentes':'melhor aderência');
-  $('#jobList').innerHTML = jobs.length ? jobs.map((job)=>card(job,page==='radar'?scores.findIndex((item)=>item.id===job.id)+1:0)).join('') :
+  $('#jobList').innerHTML = jobs.length ? jobs.slice(0,visible).map((job)=>card(job,page==='radar'?scores.findIndex((item)=>item.id===job.id)+1:0)).join('') :
     empty('search',state.status.running && !base.length && page==='radar'?'Consultando anúncios':base.length?'Nenhum resultado com esses filtros':page==='saved'?'Sua lista está vazia':page==='applications'?'Nenhuma candidatura registrada':'Seu radar ainda está vazio',
       state.status.running && !base.length && page==='radar'?'Verificando data, requisitos e candidatura na fonte.':base.length?'Ajuste a modalidade, a localidade ou o termo de busca.':page==='saved'?'Use o marcador para salvar uma vaga.':page==='applications'?'Abra uma vaga para acompanhar o preenchimento, ou marque uma candidatura que já enviou.':'Vagas verificadas aparecem aqui quando a busca encontra novas correspondências.');
+  $('#moreJobs').hidden=jobs.length<=visible;
   $('#jobDetail').innerHTML = details(displayed);
 }
 
@@ -478,8 +496,8 @@ function sourcesPage() {
     '<form class="form" id="sourcesForm"><div class="firecrawl-source"><span class="stat-mark">'+icon('globe')+'</span><div>'+
     '<label class="check"><input type="checkbox" name="firecrawl"'+checked(state.settings.firecrawl)+'> Firecrawl automático</label>'+
     '<p>Pesquisa pública sem chave de API, sujeita ao limite do serviço.</p>'+sourceStatus('firecrawl')+'</div></div>'+
-    '<fieldset class="source-options"><legend>Portais pesquisados</legend><p class="portal-count">'+sources.filter((source)=>enabled.includes(source.id)).length+' de '+sources.length+' portais ativos</p>'+
-    sources.map((source)=>'<div class="source-row"><label class="source-check"><input type="checkbox" name="source" value="'+source.id+'"'+checked(enabled.includes(source.id))+'>'+sourceImage(source)+'<span>'+esc(source.name)+'</span></label>'+sourceStatus(source.id)+'</div>').join('')+
+    '<fieldset class="source-options"><legend>Portais pesquisados</legend><p class="portal-count">'+radarSources.filter((source)=>enabled.includes(source.id)).length+' de '+radarSources.length+' portais ativos</p>'+
+    radarSources.map((source)=>'<div class="source-row"><label class="source-check"><input type="checkbox" name="source" value="'+source.id+'"'+checked(enabled.includes(source.id))+'>'+sourceImage(source)+'<span>'+esc(source.name)+'</span></label>'+sourceStatus(source.id)+'</div>').join('')+
     '</fieldset><button type="submit" class="button primary">'+icon('check')+' Salvar fontes</button></form></section>'+
     '<section class="panel"><h2>Portais de candidatura</h2><p>Abra um portal para entrar na sua conta e preencher os formulários disponíveis.</p>'+
     sources.map((source)=>'<div class="source-row">'+sourceImage(source)+'<div><strong>'+esc(source.name)+'</strong><p>'+esc(source.description)+'</p></div><button class="button secondary" data-action="portal" data-id="'+source.id+'" aria-label="Abrir '+esc(source.name)+'">Abrir</button></div>').join('')+
@@ -532,7 +550,7 @@ function render() {
     return;
   }
   if (page==='radar' || page==='saved') {
-    content.innerHTML=(page==='radar'?hero():title(pageNames[page],'Oportunidades que você quer revisar.'))+board();
+    content.innerHTML=(page==='radar'?'<div id="radarOverview">'+hero()+'</div>':title(pageNames[page],'Oportunidades que você quer revisar.'))+board();
     results();
   } else content.innerHTML={profile:profilePage,sources:sourcesPage,settings:settingsPage}[page]();
 }
@@ -546,6 +564,7 @@ function navigate(nextPage,id=null) {
   search='';
   mode='Todas';
   locationFilter='Todas';
+  resultLimit=RESULT_BATCH_SIZE;
   $('.sidebar').classList.remove('open');
   render();
   window.scrollTo(0,0);
@@ -679,8 +698,17 @@ function jumpJob(id) {
 
 function chooseJob(id) {
   if (id===selected && window.innerWidth>760) return;
+  const next=$('#jobList [data-job="'+CSS.escape(id)+'"]');
+  if (!next) return;
+  const radarJob=jobById(id);
+  const manual=state.manualApplications.find((entry)=>entry.id===id);
+  const job=radarJob || (manual && {...manual,manual:true});
+  if (!job) return;
+  const current=$('#jobList .card.active');
+  current?.classList.remove('active');
+  next.classList.add('active');
   selected=id;
-  results();
+  $('#jobDetail').innerHTML=details(job);
   if (window.innerWidth<=760) $('#jobDetail').scrollIntoView({block:'start'});
 }
 
@@ -702,6 +730,7 @@ document.addEventListener('click',(event)=>{
   if (view) {
     if (view.dataset.applicationView===applicationView) return;
     applicationView=view.dataset.applicationView;
+    resultLimit=RESULT_BATCH_SIZE;
     render();
     document.querySelector('[data-application-view][aria-pressed="true"]')?.focus();
     return;
@@ -713,9 +742,18 @@ document.addEventListener('click',(event)=>{
     $(selectedManual?'#manualFormTitle':'#manualApplicationForm [name="company"]')?.focus();
     return;
   }
+  if (event.target.closest('#moreJobs')) {
+    const oldCount=$('#jobList').childElementCount;
+    resultLimit=oldCount+RESULT_BATCH_SIZE;
+    results();
+    $('#jobList').children[oldCount]?.focus();
+    return;
+  }
   const filter=event.target.closest('[data-mode]');
   if (filter) {
     mode=filter.dataset.mode;
+    selected=null;
+    resultLimit=RESULT_BATCH_SIZE;
     document.querySelectorAll('[data-mode]').forEach((item)=>{
       item.classList.toggle('active',item.dataset.mode===mode);
       item.setAttribute('aria-pressed',String(item.dataset.mode===mode));
@@ -754,7 +792,11 @@ document.addEventListener('keydown',(event)=>{
 });
 
 $('#content').addEventListener('input',(event)=>{
-  if (event.target.id==='search') { search=event.target.value; results(); }
+  if (event.target.id!=='search') return;
+  search=event.target.value;
+  selected=null;
+  resultLimit=RESULT_BATCH_SIZE;
+  results();
 });
 $('#content').addEventListener('change',(event)=>{
   if (event.target.id==='appearanceTheme') {
@@ -834,6 +876,13 @@ document.addEventListener('error',(event)=>{
 },true);
 desktop?.onState((updated)=>{
   state=updated;
+  const overview=$('#radarOverview');
+  if (page==='radar' && overview && !$('.dropdown.is-open')) {
+    chrome();
+    overview.innerHTML=hero();
+    results();
+    return;
+  }
   if (page==='applications' && applicationView==='manual') {
     chrome();
     return;
@@ -841,6 +890,11 @@ desktop?.onState((updated)=>{
   if (['radar','applications','saved'].includes(page) && !document.activeElement?.matches('input,textarea,select') && !$('.dropdown.is-open')) render();
   else if (page==='sources' && !$('#sourcesForm')?.contains(document.activeElement)) render();
   else chrome();
+});
+desktop?.onProgress((progress)=>{
+  if (!state.status.running) return;
+  state={...state,status:{...state.status,progress}};
+  updateMonitor();
 });
 desktop?.onBrowser(showBrowser);
 desktop?.onRoute(navigate);

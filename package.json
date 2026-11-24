@@ -5,14 +5,14 @@
     "undici": "7.30.2"
   },
   "name": "job-hunter",
-  "version": "0.4.7",
+  "version": "0.4.8",
   "productName": "Job Hunter",
   "description": "Radar local de estágios e vagas júnior em tecnologia",
   "private": true,
   "main": "main.cjs",
   "scripts": {
     "start": "electron .",
-    "check": "node --check main.cjs && node --check jobs.cjs && node --check preload.cjs && node --check src/renderer.js && node --check src/workflow.js && node --check scripts/brand-windows-exe.mjs",
+    "check": "node --check main.cjs && node --check scan-worker.cjs && node --check jobs.cjs && node --check job-model.cjs && node --check geography.cjs && node --check preload.cjs && node --check src/renderer.js && node --check src/workflow.js && node --check scripts/brand-windows-exe.mjs",
     "brand:windows": "node scripts/brand-windows-exe.mjs"
   },
   "devDependencies": {
