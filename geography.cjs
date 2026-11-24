@@ -3,24 +3,29 @@
 const normalize = (value) => String(value ?? '').normalize('NFD').replace(/\p{Diacritic}/gu,'').toLowerCase().trim();
 const asArray = (value) => value === undefined || value === null ? [] : Array.isArray(value) ? value : [value];
 const regionNames = new Intl.DisplayNames('pt-BR',{type:'region',fallback:'none'});
-const englishRegions = new Intl.DisplayNames('en',{type:'region',fallback:'none'});
-const spanishRegions = new Intl.DisplayNames('es',{type:'region',fallback:'none'});
-const regions = new Map([
-  ['uk','GB'],['eua','US'],['usa','US'],['united states of america','US'],['estados unidos da america','US'],
-  ['england','GB'],['scotland','GB'],['wales','GB'],['northern ireland','GB'],['republic of ireland','IE']
-]);
+let regions;
 
-for (let first=65; first<=90; first++) {
-  for (let second=65; second<=90; second++) {
-    const code=String.fromCharCode(first,second);
-    if (['EU','EZ','UN','QO','XA','XB','ZZ','XK','AC','CP','DG','EA','IC','TA','UK','SU','AN','BU','DD','FX','YD','YU','ZR','CS','TP','NT'].includes(code)) continue;
-    const label=regionNames.of(code);
-    if (!label) continue;
-    regions.set(normalize(code),code);
-    for (const name of [label,englishRegions.of(code),spanishRegions.of(code)]) {
-      if (name) regions.set(normalize(name),code);
+function regionCodes() {
+  const englishRegions=new Intl.DisplayNames('en',{type:'region',fallback:'none'});
+  const spanishRegions=new Intl.DisplayNames('es',{type:'region',fallback:'none'});
+  const codes=new Map([
+    ['uk','GB'],['eua','US'],['usa','US'],['united states of america','US'],['estados unidos da america','US'],
+    ['england','GB'],['scotland','GB'],['wales','GB'],['northern ireland','GB'],['republic of ireland','IE']
+  ]);
+  const ignored=new Set(['EU','EZ','UN','QO','XA','XB','ZZ','XK','AC','CP','DG','EA','IC','TA','UK','SU','AN','BU','DD','FX','YD','YU','ZR','CS','TP','NT']);
+  for (let first=65; first<=90; first++) {
+    for (let second=65; second<=90; second++) {
+      const code=String.fromCharCode(first,second);
+      if (ignored.has(code)) continue;
+      const label=regionNames.of(code);
+      if (!label) continue;
+      codes.set(normalize(code),code);
+      for (const name of [label,englishRegions.of(code),spanishRegions.of(code)]) {
+        if (name) codes.set(normalize(name),code);
+      }
     }
   }
+  return codes;
 }
 
 function asLabel(value) {
@@ -28,7 +33,10 @@ function asLabel(value) {
 }
 
 function countryCode(value) {
-  return regions.get(normalize(asLabel(value))) || '';
+  const label=normalize(asLabel(value));
+  if (!label) return '';
+  regions ||= regionCodes();
+  return regions.get(label) || '';
 }
 
 function addressesOf(posting) {

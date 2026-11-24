@@ -1,14 +1,14 @@
 'use strict';
 
-const {app,BrowserWindow,WebContentsView,Tray,Menu,Notification,dialog,ipcMain,session,nativeImage,nativeTheme,safeStorage,clipboard,shell,powerMonitor}=require('electron');
-const {scan,publicFetch,url,fingerprints,profile,MODES,coverageAllows,fresh,expired,localDate,manualJobDetails}=require('./jobs.cjs');
+const {app,BrowserWindow,WebContentsView,Tray,Menu,Notification,dialog,ipcMain,session,nativeImage,nativeTheme,safeStorage,clipboard,shell,powerMonitor,utilityProcess}=require('electron');
+const {url,fingerprints,profile,MODES,coverageAllows,fresh,expired,localDate,manualJobDetails}=require('./job-model.cjs');
 const {readFileSync,writeFileSync,renameSync,existsSync,statSync}=require('node:fs');
 const path=require('node:path');
 const {pathToFileURL}=require('node:url');
 
 const JOB_SOURCES=require('./src/sources.js');
 const {APPLICATION_STATES,clean,activeApplication,applicationEntry,saveManualApplication,dueSlot,todaySlots,nextScheduledScan}=require('./src/workflow.js');
-const SOURCE_IDS=JOB_SOURCES.map((source)=>source.id);
+const SOURCE_IDS=JOB_SOURCES.filter((source)=>source.searchable!==false).map((source)=>source.id);
 const THEMES=['system','light','dark'];
 const SOURCE_CATALOGUE_VERSION=2;
 const BASE_SOURCE_IDS=['gupy','jobbol','linkedin','indeed','riovagas','vagas'];
@@ -36,6 +36,7 @@ let running=false;
 let quitting=false;
 let timer;
 let searchProgress=null;
+let radarWorker;
 const nativeAlerts=new Set();
 
 function readState() {
@@ -51,6 +52,8 @@ function readState() {
       settings.sourceIds=[...new Set([...settings.sourceIds,...newSources])];
       settings.sourceCatalogueVersion=SOURCE_CATALOGUE_VERSION;
     }
+    const sourceIds=settings.sourceIds.filter((id)=>SOURCE_IDS.includes(id));
+    settings.sourceIds=sourceIds.length || settings.firecrawl?sourceIds:SOURCE_IDS;
     if (!THEMES.includes(settings.theme)) settings.theme='system';
     const status={...blankStatus,...stored.status};
     if (!Array.isArray(stored.status?.scheduledRuns)) {
@@ -90,15 +93,20 @@ function state() {
   };
 }
 
-function publish() {
-  if (window && !window.isDestroyed()) window.webContents.send('hunter:state',state());
+function visibleWindow() {
+  return window && !window.isDestroyed() && window.isVisible() && !window.isMinimized();
+}
+
+function publish(snapshot) {
+  if (visibleWindow()) window.webContents.send('hunter:state',snapshot || state());
 }
 
 function commit() {
   save();
-  publish();
+  const snapshot=state();
+  publish(snapshot);
   if (tray) tray.setToolTip(data.demo?'Job Hunter · Demonstração':running?'Job Hunter · Buscando vagas':'Job Hunter');
-  return state();
+  return snapshot;
 }
 
 function nextRun(now=Date.now()) {
@@ -133,31 +141,70 @@ function displayAlert(entry) {
   try { notification.show(); } catch { nativeAlerts.delete(notification); }
 }
 
-function mergeJobs(result) {
+function mergeJobs(result,now=Date.now()) {
   const history=new Set(data.seen);
   const jobs=[...data.jobs];
   const freshJobs=[];
-  const discovered=new Set(result.jobs.flatMap(fingerprints));
+  const jobKeys=jobs.map(fingerprints);
+  const indexes=new Map();
+  const discovered=new Set();
   const closedUrls=new Set(result.closedUrls);
+
+  function indexJob(index,keys) {
+    for (const key of keys) {
+      if (!indexes.has(key)) indexes.set(key,new Set());
+      indexes.get(key).add(index);
+    }
+  }
+
+  jobKeys.forEach((keys,index)=>indexJob(index,keys));
   for (const job of result.jobs) {
     const keys=fingerprints(job);
-    const existing=jobs.findIndex((old)=>fingerprints(old).some((key)=>keys.includes(key)));
-    if (existing>=0) {
+    let existing=jobs.length;
+    for (const key of keys) {
+      for (const index of indexes.get(key) || []) existing=Math.min(existing,index);
+      discovered.add(key);
+    }
+    if (existing<jobs.length) {
+      for (const key of jobKeys[existing]) indexes.get(key).delete(existing);
       jobs[existing]={...job,id:jobs[existing].id};
     } else {
       jobs.push(job);
       if (!keys.some((key)=>history.has(key))) freshJobs.push(job);
     }
+    jobKeys[existing]=keys;
+    indexJob(existing,keys);
     for (const key of keys) history.add(key);
   }
   data.seen=[...history];
-  data.jobs=jobs.filter((job)=>{
-    if (data.saved.includes(job.id)||activeApplication(data.applications[job.id])) return true;
-    return fresh(job.publishedAt,Date.now()) && !expired(job.validThrough,Date.now()) &&
-      (!closedUrls.has(job.sourceUrl)||fingerprints(job).some((key)=>discovered.has(key)));
-  }).map((job)=>closedUrls.has(job.sourceUrl) && !fingerprints(job).some((key)=>discovered.has(key)) ?
-      {...job,validThrough:new Date(Date.now()-1000).toISOString()} : job);
+  const saved=new Set(data.saved);
+  data.jobs=jobs.flatMap((job,index)=>{
+    const closed=closedUrls.has(job.sourceUrl) && !jobKeys[index].some((key)=>discovered.has(key));
+    if (!saved.has(job.id) && !activeApplication(data.applications[job.id]) &&
+      (closed || !fresh(job.publishedAt,now) || expired(job.validThrough,now))) return [];
+    return [closed?{...job,validThrough:new Date(now-1000).toISOString()}:job];
+  });
   return freshJobs;
+}
+
+function scanInWorker(options,onProgress) {
+  return new Promise((resolve,reject)=>{
+    const worker=utilityProcess.fork(path.join(__dirname,'scan-worker.cjs'),[],{serviceName:'Job Hunter · Radar'});
+    radarWorker=worker;
+    const interrupted=()=>reject(new Error('A busca foi interrompida.'));
+    worker.once('spawn',()=>worker.postMessage(options));
+    worker.on('message',({progress,result,error})=>{
+      if (progress) { onProgress(progress); return; }
+      if (error) interrupted();
+      else resolve(result);
+      worker.kill();
+    });
+    worker.once('error',interrupted);
+    worker.once('exit',()=>{
+      if (radarWorker===worker) radarWorker=null;
+      interrupted();
+    });
+  });
 }
 
 async function run(scheduled=false) {
@@ -179,22 +226,37 @@ async function run(scheduled=false) {
   const key=apiKey();
   let result;
   const discoveredJobs=new Map();
-  let lastUpdate=0;
+  const pendingJobs=[];
+  let progressTimer;
+
+  function mergePendingJobs() {
+    if (!pendingJobs.length) return false;
+    const jobs=pendingJobs.splice(0).filter((job)=>coverageAllows(job,data.settings));
+    if (!jobs.length) return false;
+    for (const job of mergeJobs({jobs,closedUrls:[]})) {
+      if (!activeApplication(data.applications[job.id])) discoveredJobs.set(job.id,job);
+    }
+    return true;
+  }
+
+  function showProgress() {
+    progressTimer=null;
+    if (data.demo || !visibleWindow()) return;
+    if (mergePendingJobs()) publish();
+    else window.webContents.send('hunter:progress',searchProgress);
+  }
+
   function onProgress(progress) {
     if (data.demo) return;
     searchProgress={checked:progress.checked,queued:progress.queued};
-    if (progress.job && coverageAllows(progress.job,data.settings)) {
-      for (const job of mergeJobs({jobs:[progress.job],closedUrls:[]}).filter((item)=>!activeApplication(data.applications[item.id]))) {
-        discoveredJobs.set(job.id,job);
-      }
-    }
-    if (progress.job || Date.now()-lastUpdate>300) {
-      lastUpdate=Date.now();
-      publish();
-    }
+    if (progress.job) pendingJobs.push(progress.job);
+    if (!progressTimer && visibleWindow()) progressTimer=setTimeout(showProgress,600);
   }
-  try { result=await scan({settings,user,key,fetcher:publicFetch,previous:data.jobs,now:began,onProgress}); }
+  const previous=data.jobs.filter((job)=>fresh(job.publishedAt,began) && !expired(job.validThrough,began));
+  try { result=await scanInWorker({settings,user,key,previous,now:began},onProgress); }
   catch { result={jobs:[],closedUrls:[],blocked:true,partial:true}; }
+  clearTimeout(progressTimer);
+  if (quitting) return;
   const stamp=Date.now();
   searchProgress=null;
   const notifications=[];
@@ -204,6 +266,7 @@ async function run(scheduled=false) {
     commit();
     return;
   }
+  mergePendingJobs();
   if (slot) {
     data.status.lastScheduledSlot=slot;
     data.status.scheduledRuns=[{slot,completedAt:stamp,blocked:result.blocked},...data.status.scheduledRuns].slice(0,9);
@@ -269,6 +332,8 @@ function createWindow() {
     if (address!==localPage) event.preventDefault();
   });
   window.on('ready-to-show',()=>window.show());
+  window.on('show',()=>publish());
+  window.on('restore',()=>publish());
   window.on('resize',resizeBrowser);
   window.on('close',(event)=>{
     if (quitting || !tray) return;
@@ -318,7 +383,7 @@ function sendBrowser(overrides={}) {
 }
 
 function externalView() {
-  const view=new WebContentsView({webPreferences:{session:portalSession,contextIsolation:true,sandbox:true,nodeIntegration:false}});
+  const view=new WebContentsView({webPreferences:{session:getPortalSession(),contextIsolation:true,sandbox:true,nodeIntegration:false}});
   const contents=view.webContents;
   contents.setWindowOpenHandler(({url:address})=>{
     if (url(address)) setImmediate(()=>contents.isDestroyed() ? null : contents.loadURL(address).catch(()=>sendBrowser({failed:true,url:address})));
@@ -338,6 +403,15 @@ function externalView() {
     if (isMainFrame && code!==-3) sendBrowser({failed:true,url:address});
   });
   return view;
+}
+
+function getPortalSession() {
+  if (!portalSession) {
+    portalSession=session.fromPartition('persist:jobhunter-portais');
+    portalSession.setPermissionRequestHandler((_contents,_permission,callback)=>callback(false));
+    portalSession.setPermissionCheckHandler(()=>false);
+  }
+  return portalSession;
 }
 
 function openBrowser(address) {
@@ -392,7 +466,7 @@ function startApplication(id) {
 }
 
 function updateManualApplication(payload) {
-  if (payload.portalId && !SOURCE_IDS.includes(payload.portalId)) throw new Error('Selecione um portal válido.');
+  if (payload.portalId && !JOB_SOURCES.some((source)=>source.id===payload.portalId)) throw new Error('Selecione um portal válido.');
   const previous=data.manualApplications;
   data.manualApplications=saveManualApplication(previous,payload);
   try { return commit(); }
@@ -549,8 +623,9 @@ const commands={
   },
   clearSessions:async ()=>{
     closeBrowser();
-    await portalSession.clearStorageData();
-    await portalSession.clearCache();
+    const browsing=getPortalSession();
+    await browsing.clearStorageData();
+    await browsing.clearCache();
     return {};
   }
 };
@@ -563,14 +638,15 @@ if (!app.requestSingleInstanceLock()) {
 } else {
   app.on('second-instance',showWindow);
   app.on('activate',showWindow);
-  app.on('before-quit',()=>{quitting=true;clearTimeout(timer);});
+  app.on('before-quit',()=>{
+    quitting=true;
+    clearTimeout(timer);
+    radarWorker?.kill();
+  });
   app.on('window-all-closed',()=>{if(!tray&&process.platform!=='darwin')app.quit();});
   app.whenReady().then(()=>{
     statePath=path.join(app.getPath('userData'),'hunter.json');
     data=readState();
-    portalSession=session.fromPartition('persist:jobhunter-portais');
-    portalSession.setPermissionRequestHandler((_contents,_permission,callback)=>callback(false));
-    portalSession.setPermissionCheckHandler(()=>false);
     ipcMain.handle('hunter:request',async (event,action,payload={})=>{
       if (event.sender!==window?.webContents||event.senderFrame?.url!==localPage||!Object.hasOwn(commands,action)) return {error:'Ação indisponível.'};
       try { return await commands[action](payload); }
