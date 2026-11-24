@@ -13,9 +13,12 @@ const THEMES=['system','light','dark'];
 const SOURCE_CATALOGUE_VERSION=2;
 const BASE_SOURCE_IDS=['gupy','jobbol','linkedin','indeed','riovagas','vagas'];
 const HOUR=3600000;
+const WINDOWS_APP_ID='br.jobhunter.radar';
+const ASSETS=path.join(__dirname,'src','assets');
+const WINDOWS_ICON=path.join(ASSETS,'app-icon.ico');
 const testDataDir=process.env.JOB_HUNTER_TEST_DATA_DIR;
 if (testDataDir) app.setPath('userData',testDataDir);
-if (process.platform==='win32') app.setAppUserModelId('br.jobhunter.desktop');
+if (process.platform==='win32') app.setAppUserModelId(WINDOWS_APP_ID);
 
 const defaultSettings={auto:true,notifications:true,modes:MODES,theme:'system',sourceIds:SOURCE_IDS,sourceCatalogueVersion:SOURCE_CATALOGUE_VERSION,includeSaoPaulo:true,includeInternational:true,firecrawl:true,alexandria:false};
 const blankStatus={lastRun:null,lastSuccess:null,nextRun:null,failures:0,firstFailure:null,persistentAlert:false,lastScheduledSlot:null,scheduledRuns:[],sources:{}};
@@ -235,12 +238,11 @@ async function run(scheduled=false) {
 }
 
 function appIcon() {
-  const assets=path.join(__dirname,'src','assets');
   if (process.platform==='win32') {
-    const icon=nativeImage.createFromPath(path.join(assets,'app-icon.ico'));
+    const icon=nativeImage.createFromPath(WINDOWS_ICON);
     if (!icon.isEmpty()) return icon;
   }
-  return nativeImage.createFromPath(path.join(assets,'app-icon.png'));
+  return nativeImage.createFromPath(path.join(ASSETS,'app-icon.png'));
 }
 
 function showWindow() {
@@ -254,6 +256,10 @@ function createWindow() {
     title:'Job Hunter '+app.getVersion(),width:1440,height:940,minWidth:760,minHeight:620,backgroundColor:(data.settings.theme==='dark'||(data.settings.theme==='system'&&nativeTheme.shouldUseDarkColors))?'#14111e':'#f8f7fc',show:false,icon:appIcon(),
     webPreferences:{preload:path.join(__dirname,'preload.cjs'),nodeIntegration:false,contextIsolation:true,sandbox:true}
   });
+  if (process.platform==='win32') {
+    const launcher=app.isPackaged?'"'+process.execPath+'"':'"'+process.execPath+'" "'+app.getAppPath()+'"';
+    window.setAppDetails({appId:WINDOWS_APP_ID,appIconPath:WINDOWS_ICON,relaunchCommand:launcher,relaunchDisplayName:'Job Hunter'});
+  }
   window.setMenuBarVisibility(false);
   window.webContents.setWindowOpenHandler(()=>({action:'deny'}));
   window.webContents.on('will-navigate',(event,details)=>{
@@ -534,6 +540,7 @@ if (!app.requestSingleInstanceLock()) {
       try { return await commands[action](payload); }
       catch (error) { return {error:error.message||'A ação não foi concluída.'}; }
     });
+    if (app.dock) app.dock.setIcon(appIcon());
     createWindow();
     createTray();
     arm();
