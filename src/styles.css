@@ -60,8 +60,13 @@ button:disabled{opacity:.55;cursor:not-allowed}
 .hero .button{background:#edddff;color:#44237a;border-color:#ffffff22;box-shadow:0 4px 20px #2610423b}
 .hero .button:hover{background:#fff}
 .hero .button img{filter:none;opacity:.72}
-.radar-art{position:absolute;right:14%;top:50%;width:clamp(145px,24vw,270px);height:auto;transform:translateY(-50%);opacity:.8;pointer-events:none}
-.nav [data-icon="radar"] img,.hero-label img,.button img[src$="job-hunter-symbol.webp"]{filter:none;object-fit:contain}
+.radar-art{position:absolute;right:12%;top:50%;width:390px;height:270px;transform:translateY(-50%) rotate(-12deg);opacity:.76;pointer-events:none}
+.radar-art:before{content:"";position:absolute;inset:0;background:linear-gradient(#e4c6ff18 1px,transparent 1px),linear-gradient(90deg,#e4c6ff18 1px,transparent 1px);background-size:23px 23px;mask-image:radial-gradient(ellipse,#000 20%,transparent 72%)}
+.radar-art span{position:absolute;top:50%;left:50%;width:var(--d);height:var(--d);border-radius:50%;border:1px solid #d9bdff68;transform:translate(-50%,-50%) scaleY(.74);box-shadow:0 0 14px #a46aff53,inset 0 0 14px #aa75ff31}
+.radar-art:after{content:"";position:absolute;width:230px;height:230px;border-radius:50%;background:conic-gradient(from 20deg,transparent 55deg,#c992ff51 109deg,#d2a8ff12 113deg,transparent 116deg);top:50%;left:50%;transform:translate(-50%,-50%) scaleY(.74)}
+.radar-art b{position:absolute;top:var(--y);left:var(--x);width:7px;height:7px;background:#d6b8ff;border-radius:50%;box-shadow:0 0 12px 3px #d6b8ff80}
+.radar-art b:first-of-type{background:#acffd4;box-shadow:0 0 13px 3px #acffd48a}
+.button img[src$="job-hunter-symbol.webp"]{filter:none;object-fit:contain}
 .stats{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:13px;margin:15px 0 23px}
 .stat{min-height:79px;background:#fff;border:1px solid var(--line);border-radius:14px;padding:13px 14px;display:flex;align-items:center;gap:12px;box-shadow:var(--shadow)}
 .stat-mark{width:39px;height:39px;display:grid;place-items:center;border-radius:11px;background:#f2ebff;color:#7547d2}
