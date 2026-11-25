@@ -1,13 +1,13 @@
 'use strict';
 
 const {app,BrowserWindow,WebContentsView,Tray,Menu,Notification,dialog,ipcMain,session,nativeImage,nativeTheme,safeStorage,clipboard,shell,powerMonitor,utilityProcess}=require('electron');
-const {url,fingerprints,profile,MODES,coverageAllows,fresh,expired,localDate,manualJobDetails}=require('./job-model.cjs');
+const {url,fingerprints,profile,MODES,coverageAllows,fresh,expired,localDate,manualJobDetails,careerTerms,fitRadar}=require('./job-model.cjs');
 const {readFileSync,writeFileSync,renameSync,existsSync,statSync}=require('node:fs');
 const path=require('node:path');
 const {pathToFileURL}=require('node:url');
 
 const JOB_SOURCES=require('./src/sources.js');
-const {APPLICATION_STATES,clean,activeApplication,applicationEntry,saveManualApplication,dueSlot,todaySlots,nextScheduledScan}=require('./src/workflow.js');
+const {APPLICATION_STATES,clean,activeApplication,applicationEntry,saveManualApplication,dueSlot,todaySlots,nextScheduledScan,radarPreferences}=require('./src/workflow.js');
 const SOURCE_IDS=JOB_SOURCES.filter((source)=>source.searchable!==false).map((source)=>source.id);
 const THEMES=['system','light','dark'];
 const SOURCE_CATALOGUE_VERSION=2;
@@ -22,7 +22,7 @@ if (process.platform==='win32') app.setAppUserModelId(WINDOWS_APP_ID);
 
 const defaultSettings={auto:true,notifications:true,modes:MODES,theme:'system',sourceIds:SOURCE_IDS,sourceCatalogueVersion:SOURCE_CATALOGUE_VERSION,includeSaoPaulo:true,includeInternational:true,firecrawl:true,alexandria:false};
 const blankStatus={lastRun:null,lastSuccess:null,nextRun:null,failures:0,firstFailure:null,persistentAlert:false,lastScheduledSlot:null,scheduledRuns:[],sources:{},sourceIssues:{}};
-const initial={demo:true,jobs:[],saved:['demo-1'],applications:{},manualApplications:[],alerts:[],seen:[],profile,settings:defaultSettings,status:blankStatus,resumePath:'',encryptedKey:''};
+const initial={demo:true,jobs:[],saved:['demo-1'],applications:{},manualApplications:[],alerts:[],seen:[],dismissed:[],profile,settings:defaultSettings,status:blankStatus,resumePath:'',encryptedKey:''};
 const homePage=path.join(__dirname,'src','index.html');
 const localPage=pathToFileURL(homePage).href;
 let data;
@@ -33,6 +33,7 @@ let browser;
 let browserState={open:false,url:'',canGoBack:false,failed:false};
 let portalSession;
 let running=false;
+let importing=false;
 let quitting=false;
 let timer;
 let searchProgress=null;
@@ -55,13 +56,14 @@ function readState() {
     const sourceIds=settings.sourceIds.filter((id)=>SOURCE_IDS.includes(id));
     settings.sourceIds=sourceIds.length || settings.firecrawl?sourceIds:SOURCE_IDS;
     if (!THEMES.includes(settings.theme)) settings.theme='system';
+    if (settings.radar) settings.radar=radarPreferences(settings.radar);
     const status={...blankStatus,...stored.status};
     if (!Array.isArray(stored.status?.scheduledRuns)) {
       status.scheduledRuns=[];
       status.lastScheduledSlot=null;
     }
     const manualApplications=Array.isArray(stored.manualApplications)?stored.manualApplications:[];
-    return {...initial,...stored,profile:{...profile,...stored.profile},settings,status,manualApplications};
+    return {...initial,...stored,dismissed:Array.isArray(stored.dismissed)?stored.dismissed:[],profile:{...profile,...stored.profile},settings,status,manualApplications};
   } catch(error) {
     if (error.code!=='ENOENT') {
       try { renameSync(statePath,statePath+'.invalid-'+Date.now()); } catch {}
@@ -86,9 +88,12 @@ function apiKey() {
 function state() {
   const slots=todaySlots(localDate(Date.now()));
   const scheduledRuns=slots.map((slot)=>({slot,run:data.status.scheduledRuns.find((entry)=>entry.slot===slot) ?? null}));
+  const dismissed=new Set(data.dismissed);
   return {
     version:app.getVersion(),demo:data.demo,jobs:data.jobs,saved:data.saved,applications:data.applications,alerts:data.alerts,
     manualApplications:data.manualApplications.map((entry)=>manualJobDetails(entry,data.profile)),profile:data.profile,settings:data.settings,
+    hiddenJobIds:[...data.dismissed.filter((key)=>key.startsWith('demo-')),
+      ...(dismissed.size?data.jobs.filter((job)=>fingerprints(job).some((key)=>dismissed.has(key))).map((job)=>job.id):[])],
     status:{running,lastRun:data.status.lastRun,nextRun:data.status.nextRun,scheduledRuns,sources:data.status.sources,sourceIssues:data.status.sourceIssues,progress:searchProgress}
   };
 }
@@ -143,6 +148,7 @@ function displayAlert(entry) {
 
 function mergeJobs(result,now=Date.now()) {
   const history=new Set(data.seen);
+  const dismissed=new Set(data.dismissed);
   const jobs=[...data.jobs];
   const freshJobs=[];
   const jobKeys=jobs.map(fingerprints);
@@ -160,6 +166,7 @@ function mergeJobs(result,now=Date.now()) {
   jobKeys.forEach((keys,index)=>indexJob(index,keys));
   for (const job of result.jobs) {
     const keys=fingerprints(job);
+    if (keys.some((key)=>dismissed.has(key))) continue;
     let existing=jobs.length;
     for (const key of keys) {
       for (const index of indexes.get(key) || []) existing=Math.min(existing,index);
@@ -208,7 +215,7 @@ function scanInWorker(options,onProgress) {
 }
 
 async function run(scheduled=false) {
-  if (running || data.demo) return;
+  if (running || importing || data.demo) return;
   const began=Date.now();
   const pending=data.settings.auto?dueSlot(localDate(began),began):null;
   const slot=pending>(data.status.lastScheduledSlot || 0)?pending:null;
@@ -447,11 +454,23 @@ function updateProfile(payload) {
   const name=clean(payload.name,100);
   const course=clean(payload.course,150);
   const graduation=clean(payload.graduation,7);
-  if (!name || !course || !/^20\d\d-(?:0[1-9]|1[0-2])$/.test(graduation)) throw new Error('Preencha nome, curso e previsão de conclusão.');
+  if (!name || (graduation && !/^20\d\d-(?:0[1-9]|1[0-2])$/.test(graduation))) throw new Error('Informe o nome e, se for o caso, uma previsão de conclusão válida.');
   if (!Array.isArray(payload.skills)) throw new Error('Lista de competências inválida.');
   data.profile={...data.profile,name,course,graduation,period:clean(payload.period,40),experience:clean(payload.experience,300),
     skills:[...new Set(payload.skills.map((skill)=>clean(skill,80)).filter(Boolean))].slice(0,40)};
+  updateRadarMatches();
   return commit();
+}
+
+function updateRadarMatches() {
+  const {radar}=data.settings;
+  if (!radar) return;
+  const now=Date.now();
+  for (const job of data.jobs) {
+    const match=fitRadar(job,data.profile,radar,now);
+    job.radarMatch=Boolean(match);
+    if (match) Object.assign(job,match);
+  }
 }
 
 function requireTrackedJob(id) {
@@ -508,6 +527,51 @@ const commands={
     return commit();
   },
   scan:()=>{void run();return state();},
+  updateRadar:(payload)=>{
+    const radar=radarPreferences(payload);
+    if (!radar.levels.length) throw new Error('Selecione pelo menos um nível de vaga.');
+    if (!Array.isArray(payload.modes) || !payload.modes.length || payload.modes.some((mode)=>!MODES.includes(mode))) {
+      throw new Error('Selecione pelo menos uma modalidade.');
+    }
+    if (!careerTerms(radar,data.profile).length) throw new Error('Informe uma área, um cargo ou salve um curso no perfil.');
+    if (payload.modes.some((mode)=>mode!=='Remoto') && !radar.locations.length) throw new Error('Informe pelo menos uma localidade presencial ou híbrida.');
+    if (payload.modes.includes('Remoto') && !radar.remoteLocations.length) throw new Error('Informe de onde você pode trabalhar remotamente.');
+    data.settings={...data.settings,radar,modes:[...new Set(payload.modes)]};
+    updateRadarMatches();
+    arm();
+    return commit();
+  },
+  dismissJob:({id})=>{
+    const job=findJob(id);
+    if (!job && !(data.demo && /^demo-[0-4]$/.test(id))) throw new Error('Vaga indisponível.');
+    const keys=job?fingerprints(job).filter((key)=>!key.startsWith('role:')):[id];
+    data.dismissed=[...new Set([...data.dismissed,...keys])];
+    if (job && !data.saved.includes(id) && !activeApplication(data.applications[id])) data.jobs=data.jobs.filter((item)=>item.id!==id);
+    return commit();
+  },
+  importJob:async ({address})=>{
+    const importUrl=clean(address,8192);
+    if (!url(importUrl)) throw new Error('Cole o link HTTPS de um anúncio.');
+    if (running || importing) throw new Error('Aguarde a busca atual terminar.');
+    importing=true;
+    try {
+      const result=await scanInWorker({settings:data.settings,user:data.profile,key:apiKey(),importUrl},()=>{});
+      if (result.kind==='filtered') throw new Error('A vaga está fora das preferências do radar.');
+      if (result.kind==='closed') throw new Error('A vaga está encerrada ou fora dos últimos 30 dias.');
+      if (result.kind!=='verified') throw new Error('Não foi possível confirmar a página original. Cole o link direto da vaga no portal.');
+      if (!coverageAllows(result.job,data.settings)) throw new Error('A vaga está fora das preferências do radar.');
+      const keys=fingerprints(result.job);
+      data.dismissed=data.dismissed.filter((key)=>!keys.includes(key));
+      mergeJobs({jobs:[result.job],closedUrls:[]});
+      data.demo=false;
+      const found=data.jobs.find((job)=>fingerprints(job).some((key)=>keys.includes(key)));
+      return {...commit(),importedJobId:found?.id};
+    } finally {
+      importing=false;
+      arm();
+      publish();
+    }
+  },
   toggleSaved:({id})=>{
     if (!findJob(id) && !/^demo-[0-4]$/.test(id)) throw new Error('Vaga indisponível.');
     const index=data.saved.indexOf(id);

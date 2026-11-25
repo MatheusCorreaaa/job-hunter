@@ -2,6 +2,12 @@
 
 Radar desktop de estágios e vagas júnior em tecnologia.
 
+## Personalizar o radar
+
+Em **Meu perfil → Preferências do radar**, escolha áreas, cargos, níveis e modalidades. Cadastre uma cidade ou um país por linha para vagas presenciais e híbridas. Para vagas remotas, informe de onde você pode trabalhar. O curso é opcional e pode ser usado como termo de busca. As competências ajudam a ordenar os resultados.
+
+Em **Radar de vagas → Importar link**, cole a URL de um anúncio ou um link de resultado do Google que aponte para ele. O radar tenta confirmar a página original, a data e a candidatura. A busca web via Firecrawl também pode encontrar vagas dos portais por palavras-chave. A lixeira remove a vaga do radar e evita que o mesmo anúncio volte em outra busca.
+
 ## Abrir no computador
 
 Extraia todo o ZIP para uma pasta.
@@ -21,7 +27,7 @@ A tela inicial contém vagas fictícias para explorar a interface. Clique em **A
 
 As três buscas diárias rodam às **08h, 16h e 22h**, no horário de Brasília. Em **Configurações**, veja as rodadas executadas no dia e a próxima busca. O app precisa estar em execução e o computador precisa estar ligado e conectado. Quando a bandeja do sistema estiver disponível, fechar a janela mantém o radar em execução. Use **Sair do Job Hunter** na bandeja para encerrar o processo. Você também pode iniciar uma busca pelo radar.
 
-A busca limita a lista a publicações dos últimos 30 dias. A cobertura inclui presencial e híbrido na cidade do Rio de Janeiro, híbrido em São Paulo capital, remoto elegível no Brasil e anúncios no exterior. Vagas remotas do exterior precisam aceitar candidatos no Brasil. Quando a vaga no exterior publica condições de autorização de trabalho ou visto, o app as exibe no detalhe. A fonte original e um caminho de candidatura em aberto são necessários para incluir a vaga. Páginas sem informação suficiente ficam fora da lista. O radar guarda o histórico de anúncios verificados no computador e só gera avisos para novas correspondências ou uma interrupção persistente da busca.
+A busca limita a lista a publicações dos últimos 30 dias. A busca usa as localidades e modalidades salvas nas preferências. Perfis que ainda usam a configuração inicial seguem a cobertura de exemplo. Quando a vaga no exterior publica condições de autorização de trabalho ou visto, o app as exibe no detalhe. A fonte original e um caminho de candidatura em aberto são necessários para incluir a vaga. Páginas sem informação suficiente ficam fora da lista. O radar guarda o histórico de anúncios verificados no computador e só gera avisos para novas correspondências ou uma interrupção persistente da busca.
 
 A lista abre com até 30 vagas por vez. Use **Mostrar mais vagas** para continuar. A busca por cargo, empresa ou tecnologia considera a lista inteira.
 

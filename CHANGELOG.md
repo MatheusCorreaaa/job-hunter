@@ -1,5 +1,12 @@
 # Histórico de mudanças
 
+## 0.5.0 · 25 de novembro de 2026
+
+- Personalizou o radar por áreas, cargos, níveis, modalidades e várias localidades.
+- Usou o curso e as competências do perfil para encontrar e ordenar vagas de diferentes áreas.
+- Acrescentou busca web por palavras-chave e importação de links com verificação do anúncio no portal de origem.
+- Incluiu lixeira nos cartões para remover vagas do radar e impedir seu retorno nas próximas buscas.
+
 ## 0.4.11 · 24 de novembro de 2026
 
 - Restaurou a ilustração original do banner **Seu radar de vagas** e o ícone de radar no menu lateral.
