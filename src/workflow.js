@@ -12,7 +12,50 @@ const APPLICATION_STATES=[
 ];
 const MANUAL_APPLICATION_STATES=APPLICATION_STATES.slice(1);
 const JOB_MODES=['Remoto','Híbrido','Presencial'];
-const JOB_TYPES=['Estágio','Júnior','Trainee','Jovem aprendiz','Pleno','Sênior','Outro'];
+const JOB_TYPES=['Estágio','Júnior','Trainee','Jovem aprendiz','Analista','Pleno','Sênior','Outro'];
+
+function searchText(value) {
+  return String(value ?? '').normalize('NFD').replace(/\p{Diacritic}/gu,'')
+    .toLowerCase().replace(/[^\p{L}\p{N}+#]+/gu,' ').trim();
+}
+
+function searchList(value, limit=10) {
+  const items=Array.isArray(value)?value:typeof value==='string'?value.split(/[\n;]/):[];
+  const unique=new Map();
+  for (const item of items) {
+    const label=clean(item,100);
+    const key=searchText(label);
+    if (key && !unique.has(key)) unique.set(key,label);
+    if (unique.size===limit) break;
+  }
+  return [...unique.values()];
+}
+
+function radarPreferences(payload) {
+  return {
+    areas:searchList(payload?.areas,8), titles:searchList(payload?.titles,8),
+    levels:JOB_TYPES.filter((level)=>Array.isArray(payload?.levels) && payload.levels.includes(level)),
+    locations:searchList(payload?.locations), remoteLocations:searchList(payload?.remoteLocations),
+    useCourse:payload?.useCourse===true
+  };
+}
+
+function matchesLocation(location, selected) {
+  const actual=searchText(location);
+  const target=searchText(selected);
+  return Boolean(target) && (' '+actual+' ').includes(' '+target+' ');
+}
+
+function searchCoverage(job, modes, radar) {
+  if (!modes.includes(job.mode)) return false;
+  if (!radar) return true;
+  if (!radar.levels.some((level)=>(job.levels || [job.type]).includes(level))) return false;
+  if (job.mode==='Remoto') {
+    return (job.remoteLocations || []).some((eligible)=>radar.remoteLocations.some((selected)=>
+      matchesLocation(eligible,selected)));
+  }
+  return (job.locations || [job.location]).some((place)=>radar.locations.some((selected)=>matchesLocation(place,selected)));
+}
 
 function clean(value,cap) {
   return typeof value==='string' ? value.trim().slice(0,cap) : '';
@@ -117,5 +160,5 @@ function nextScheduledScan(day, now, lastSlot) {
 
 if (typeof module==='object') module.exports={
   SCAN_TIMES,APPLICATION_STATES,MANUAL_APPLICATION_STATES,JOB_TYPES,JOB_MODES,clean,publicUrl,manualLogo,activeApplication,applicationEntry,saveManualApplication,
-  todaySlots,dueSlot,nextScheduledScan
+  todaySlots,dueSlot,nextScheduledScan,searchText,searchList,radarPreferences,matchesLocation,searchCoverage
 };

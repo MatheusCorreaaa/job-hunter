@@ -1,7 +1,7 @@
 'use strict';
 
 const JOB_SOURCES=require('./src/sources.js');
-const {publicUrl:url,JOB_MODES:MODES}=require('./src/workflow.js');
+const {publicUrl:url,JOB_MODES:MODES,searchText,searchList}=require('./src/workflow.js');
 const {place,coverageAllows}=require('./geography.cjs');
 
 const DAY = 86400000;
@@ -93,6 +93,59 @@ function fit(job, user, now) {
   return {skills:labels,score,reason:base+overlap};
 }
 
+function jobLevels(title, employment) {
+  const words=searchText(title);
+  if (internship.test(words) || employment==='vacancy_type_internship' || employment==='intern') return ['Estágio'];
+  if (/\b(?:aprendiz|apprentice)\b/.test(words)) return ['Jovem aprendiz'];
+  if (/\btrainee\b/.test(words)) return ['Trainee'];
+  const levels=[];
+  if (/\b(?:senior|sr|staff|lead|principal)\b/.test(words)) levels.push('Sênior');
+  else if (/\b(?:pleno|pl|mid level|midlevel)\b/.test(words)) levels.push('Pleno');
+  else if (junior.test(norm(title))) levels.push('Júnior');
+  if (/\b(?:analista|analyst)\b/.test(words)) levels.push('Analista');
+  return levels.length?levels:['Outro'];
+}
+
+const commonAreaWords=new Set('de da do das dos e em para com analise curso nivel tecnico graduacao ensino estagio bacharelado'.split(' '));
+
+function areaMatches(value, area) {
+  const words=searchText(area).split(' ').filter((word)=>word && !commonAreaWords.has(word));
+  const field=' '+searchText(value)+' ';
+  return words.length>0 && (field.includes(' '+searchText(area)+' ') ||
+    words.every((word)=>field.includes(' '+word+' ')));
+}
+
+function careerTerms(radar,user) {
+  const course=radar.useCourse?[user.course]:[];
+  if (searchText(course[0])==='analise e desenvolvimento de sistemas') course.push('desenvolvimento de sistemas','ADS');
+  return searchList([...radar.titles,...radar.areas,...course],19);
+}
+
+function fitRadar(job,user,radar,now) {
+  const qualifications=job.required.join(' ');
+  const fullText=[job.title,qualifications,job.preferred.join(' '),job.description].join(' ');
+  const terms=careerTerms(radar,user);
+  const titleMatch=terms.find((term)=>areaMatches(job.title,term));
+  const textMatch=terms.find((term)=>areaMatches(fullText,term));
+  if (!titleMatch && !textMatch) return null;
+  if (job.type==='Estágio' && user.graduation && Date.parse(user.graduation+'-01')+31*DAY<now) return null;
+  const matched=(user.skills || []).filter((skill)=>{
+    const alias=skills.find(([label])=>searchText(label)===searchText(skill));
+    return alias?alias[1].test(norm(fullText)):matchesSkill(fullText,skill);
+  });
+  const requiredMatches=matched.filter((skill)=>matchesSkill(qualifications,skill));
+  const courseMatch=Boolean(user.course && areaMatches(fullText,user.course));
+  const score=Math.min(99,(titleMatch?64:53)+(courseMatch?7:0)+Math.min(28,matched.length*4+requiredMatches.length*3));
+  const reason='A vaga menciona '+(titleMatch || textMatch)+'.'+
+    (matched.length?' Competências em comum: '+matched.slice(0,5).join(', ')+'.':'');
+  return {skills:matched,score,reason};
+}
+
+function matchesSkill(value,skill) {
+  const target=searchText(skill);
+  return Boolean(target) && (' '+searchText(value)+' ').includes(' '+target+' ');
+}
+
 function sourceForUrl(address) {
   const hostname=address.hostname;
   if (gupyHost(hostname)) return JOB_SOURCES.find((source)=>source.id==='gupy');
@@ -142,5 +195,5 @@ function nextDaily(time, now=Date.now()) {
 
 module.exports={
   DAY,profile,MODES,url,text,norm,full,fresh,expired,canonical,senior,junior,internship,relevant,excluded,
-  skills,gupyHost,fit,sourceForUrl,manualJobDetails,fingerprints,localDate,nextDaily,coverageAllows
+  skills,gupyHost,fit,fitRadar,jobLevels,careerTerms,areaMatches,sourceForUrl,manualJobDetails,fingerprints,localDate,nextDaily,coverageAllows
 };

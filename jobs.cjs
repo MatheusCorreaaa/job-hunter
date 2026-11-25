@@ -5,9 +5,10 @@ const {load} = require('cheerio');
 const {decodeHTML} = require('entities');
 const {
   DAY,profile,MODES,url,text,norm,full,fresh,expired,canonical,senior,junior,internship,relevant,excluded,
-  skills,gupyHost,fit,sourceForUrl,manualJobDetails,fingerprints,localDate,nextDaily
+  skills,gupyHost,fit,fitRadar,jobLevels,careerTerms,sourceForUrl,manualJobDetails,fingerprints,localDate,nextDaily
 }=require('./job-model.cjs');
 const JOB_SOURCES=require('./src/sources.js');
+const {searchText}=require('./src/workflow.js');
 const {place,coverageAllows,authorizationNotes} = require('./geography.cjs');
 const {fetch: httpFetch,EnvHttpProxyAgent} = require('undici');
 const {getCACertificates,setDefaultCACertificates} = require('node:tls');
@@ -142,11 +143,12 @@ function linkedinPosting($, candidate, now) {
   };
 }
 
-function parsePage(html, address, candidate, user, now=Date.now()) {
+function parsePage(html, address, candidate, user, now=Date.now(), settings) {
   const $=load(html);
   const parsed=url(address);
   if (!parsed) return {kind:'unverified'};
   const source=sourceForUrl(parsed);
+  if (settings?.sourceIds && source && (!settings.sourceIds.includes(source.id) || source.searchable===false)) return {kind:'filtered'};
   const posting=structured($) || (source?.id==='linkedin'?linkedinPosting($,candidate,now):null);
   const content=$('main .top-card-layout').first();
   const visibleRoot=(content.length?content:$('main').length?$('main'):$('body')).clone();
@@ -170,10 +172,12 @@ function parsePage(html, address, candidate, user, now=Date.now()) {
   }
   const heading=norm(title);
   const isIntern=internship.test(heading)||array(posting.employmentType).some((item)=>norm(item)==='intern')||candidate.type==='vacancy_type_internship';
-  const type=isIntern?'Estágio':'Júnior';
+  const radar=settings?.radar;
+  const levels=radar?jobLevels(title,isIntern?'intern':''):[isIntern?'Estágio':'Júnior'];
+  const type=levels[0];
   if (!title || !company) return {kind:'unverified'};
-  if (senior.test(heading) || excluded.test(heading) || (!isIntern && !junior.test(heading))) return {kind:'filtered'};
-  const publishedAt=candidate.publishedAt || full(posting.datePosted);
+  if (radar?!radar.levels.some((level)=>levels.includes(level)):senior.test(heading) || excluded.test(heading) || (!isIntern && !junior.test(heading))) return {kind:'filtered'};
+  const publishedAt=full(posting.datePosted) || candidate.publishedAt;
   const validThrough=full(candidate.validThrough || posting.validThrough);
   if (!publishedAt || !Number.isFinite(Date.parse(publishedAt))) return {kind:'unverified'};
   if (!fresh(publishedAt,now) || expired(validThrough,now)) return {kind:'closed'};
@@ -181,10 +185,10 @@ function parsePage(html, address, candidate, user, now=Date.now()) {
   const parsedSections=sections(description,posting);
   const listing=norm(parsedSections.lines.join(' '));
   const relatedDuties=/\b(?:desenvolver|desenvolvimento|programacao|implementacao|codificar)\b[^.!?]{0,72}\b(?:software|aplicac|scripts|codigo|sistemas|automac|apis?)/.test(listing);
-  if (!relevant.test(heading) && !(isIntern && /\b(tecnologia|ti|informatica|inovacao|desenvolvimento|acelera|dados)\b/.test(heading) && relatedDuties)) return {kind:'filtered'};
+  if (!radar && !relevant.test(heading) && !(isIntern && /\b(tecnologia|ti|informatica|inovacao|desenvolvimento|acelera|dados)\b/.test(heading) && relatedDuties)) return {kind:'filtered'};
   const publicMode=norm($('main').text()).slice(0,1250);
   const modeHint=!candidate.workplaceType && /(?:^|[/–|-])\s*(?:hibrid[oa]|hybrid)\b/.test(heading) ? 'hybrid' : candidate.workplaceType;
-  const locality=place(posting,{...candidate,sourceId:source?.id,workplaceType:modeHint},listing+' '+publicMode+' '+heading);
+  const locality=place(posting,{...candidate,sourceId:source?.id,workplaceType:modeHint},listing+' '+publicMode+' '+heading,radar);
   if (!locality) return {kind:'filtered'};
   const direct=applyLink($,address);
   if (!direct) return {kind:'unverified'};
@@ -192,14 +196,15 @@ function parsePage(html, address, candidate, user, now=Date.now()) {
   const channel=source?.name || 'Site de carreiras';
   const job={
     id:createHash('sha256').update(identity).digest('hex').slice(0,24),
-    title,company,type,channel,...locality,sourceUrl:identity,applyUrl:direct,publishedAt,dateEstimated:posting.dateEstimated===true,validThrough:validThrough || null,
+    title,company,type,levels,channel,...locality,sourceUrl:identity,applyUrl:direct,publishedAt,dateEstimated:posting.dateEstimated===true,validThrough:validThrough || null,
     verifiedAt:new Date(now).toISOString(),
     workEligibility:locality.regionKey==='international'?authorizationNotes(parsedSections.lines):[],
     sourceMeta:{workplaceType:candidate.workplaceType,city:candidate.city,state:candidate.state,type:candidate.type,sourceId:source?.id},
     required:parsedSections.required.slice(0,24),preferred:parsedSections.preferred.slice(0,18),
     description:parsedSections.lines.join(' ').slice(0,460)
   };
-  const match=fit({...job,description:parsedSections.lines.join(' '),required:parsedSections.required,preferred:parsedSections.preferred},user,now);
+  const details={...job,description:parsedSections.lines.join(' '),required:parsedSections.required,preferred:parsedSections.preferred};
+  const match=radar?fitRadar(details,user,radar,now):fit(details,user,now);
   return match ? {kind:'verified',job:{...job,...match}} : {kind:'filtered'};
 }
 
@@ -261,15 +266,20 @@ async function gupy(feed, settings, fetcher, now) {
     for (const record of data.data) {
       const name=norm(record.name);
       const isIntern=record.type==='vacancy_type_internship'||internship.test(name);
-      if (!fresh(record.publishedDate,now)||expired(record.applicationDeadline,now)||senior.test(name)||excluded.test(name)||
-          (!isIntern && (!junior.test(name)||!relevant.test(name)))) continue;
+      if (!fresh(record.publishedDate,now) || expired(record.applicationDeadline,now)) continue;
       const foundMode={remote:'Remoto',hybrid:'Híbrido','on-site':'Presencial'}[record.workplaceType];
       if (foundMode && !settings.modes.includes(foundMode)) continue;
-      const rio=norm(record.city)==='rio de janeiro' && ['rio de janeiro','rj'].includes(norm(record.state));
-      const saoPaulo=norm(record.city)==='sao paulo' && ['sao paulo','sp'].includes(norm(record.state));
-      const hybridSP=settings.includeSaoPaulo!==false && foundMode==='Híbrido' && saoPaulo;
-      if (foundMode!=='Remoto' && !rio && !hybridSP) continue;
-      if (isIntern && !relevant.test(name) && !/\b(tecnologia|ti|informatica|inovacao|sistemas|computacao|dados|desenvolvimento|acelera)\b/.test(name)) continue;
+      if (settings.radar) {
+        if (!jobLevels(record.name,record.type).some((level)=>settings.radar.levels.includes(level))) continue;
+      } else {
+        if (senior.test(name)||excluded.test(name)||
+            (!isIntern && (!junior.test(name)||!relevant.test(name)))) continue;
+        const rio=norm(record.city)==='rio de janeiro' && ['rio de janeiro','rj'].includes(norm(record.state));
+        const saoPaulo=norm(record.city)==='sao paulo' && ['sao paulo','sp'].includes(norm(record.state));
+        const hybridSP=settings.includeSaoPaulo!==false && foundMode==='Híbrido' && saoPaulo;
+        if (foundMode!=='Remoto' && !rio && !hybridSP) continue;
+        if (isIntern && !relevant.test(name) && !/\b(tecnologia|ti|informatica|inovacao|sistemas|computacao|dados|desenvolvimento|acelera)\b/.test(name)) continue;
+      }
       const address=postingUrl(record.jobUrl,record.id);
       if (address) found.push({url:address,title:record.name,company:record.careerPageName,type:record.type,publishedAt:record.publishedDate,
           validThrough:record.applicationDeadline,workplaceType:record.workplaceType,city:record.city,state:record.state});
@@ -280,7 +290,13 @@ async function gupy(feed, settings, fetcher, now) {
   return found;
 }
 
-function gupyFeeds(settings) {
+function gupyFeeds(settings,user) {
+  if (settings.radar) {
+    const terms=careerTerms(settings.radar,user).slice(0,6);
+    const feeds=terms.map((jobName)=>({jobName}));
+    if (settings.modes.includes('Remoto')) feeds.push(...terms.slice(0,4).map((jobName)=>({jobName,workplaceType:'remote'})));
+    return feeds;
+  }
   const feeds=[];
   if (settings.modes.includes('Remoto')) {
     feeds.push({workplaceType:'remote',type:'vacancy_type_internship'});
@@ -335,6 +351,25 @@ function cleanListing(address, id) {
   return canonical(address.href);
 }
 
+function listingAddress(value) {
+  let address=url(value);
+  if (!address) return null;
+  if (/^(?:www\.)?google\.(?:com|com\.br|pt|co\.uk)$/.test(address.hostname) && address.pathname==='/url') {
+    address=url(address.searchParams.get('q') || address.searchParams.get('url'));
+    if (!address) return null;
+  }
+  const id=sourceForUrl(address)?.id;
+  if (id==='glassdoor' && /^\/partner\/jobListing\.htm$/i.test(address.pathname)) {
+    const number=address.searchParams.get('jobListingId');
+    if (/^\d+$/.test(number || '')) return new URL(address.origin+'/job-listing/jv?jl='+number);
+  }
+  if (id==='indeed' && ['\/rc/clk','\/pagead/clk'].includes(address.pathname)) {
+    const key=address.searchParams.get('jk');
+    if (/^[\da-f]{10,32}$/i.test(key || '')) return new URL(address.origin+'/viewjob?jk='+key);
+  }
+  return address;
+}
+
 function likelyTitle(title) {
   const heading=norm(title);
   if (senior.test(heading) || excluded.test(heading)) return false;
@@ -342,7 +377,44 @@ function likelyTitle(title) {
   return technical && (internship.test(heading) || junior.test(heading));
 }
 
-function publicListings(id, settings) {
+function personalizedListings(id,settings,user) {
+  const radar=settings.radar;
+  const slug=(value)=>searchText(value).replace(/[^a-z0-9 ]/g,'').replace(/ +/g,'-');
+  const query=(origin,params)=>({url:origin+'?'+new URLSearchParams(params)});
+  const term=careerTerms(radar,user);
+  const label=(word,level)=>level==='Outro'?word:word+' '+level;
+  const subjects=term.length && radar.levels.length?
+    [...new Set([
+      ...radar.levels.map((level)=>label(term[0],level)),
+      ...term.map((word,index)=>label(word,radar.levels[index%radar.levels.length]))
+    ])].slice(0,16):[];
+  const locations=settings.modes.some((mode)=>mode!=='Remoto')?radar.locations:[];
+  const places=[...locations,...(settings.modes.includes('Remoto')?radar.remoteLocations.map((place)=>place+' remoto'):[])];
+  if (id==='linkedin' || id==='indeed') {
+    const pairs=Array.from({length:Math.max(subjects.length,places.length)},(_,index)=>[subjects[index%subjects.length],places[index%places.length]]);
+    return pairs.filter(([subject,place])=>subject && place).map(([subject,place])=>{
+      const remote=place.endsWith(' remoto');
+      const location=remote?place.slice(0,-7):place;
+      return id==='linkedin'?query('https://www.linkedin.com/jobs/search/',{keywords:subject,location,f_TPR:'r2592000',...(remote?{f_WT:'2'}:{})}):
+        query('https://br.indeed.com/jobs',{q:remote?subject+' remoto':subject,l:location,fromage:'30'});
+    });
+  }
+  return subjects.map((subject)=>{
+    if (id==='riovagas') return {...query('https://riovagas.com.br/',{s:subject,feed:'rss2'}),rss:true};
+    if (id==='jobbol') return query('https://www.jobbol.com.br/pesquisa-vagas',{cargo:subject});
+    if (id==='vagas') return {url:'https://www.vagas.com.br/vagas-de-'+slug(subject)};
+    if (id==='empregos') return {url:'https://www.empregos.com.br/vagas/'+slug(subject)};
+    if (id==='glassdoor') return query('https://www.glassdoor.com/Job/jobs.htm',{'sc.keyword':subject});
+    if (id==='jooble') return {url:'https://br.jooble.org/vagas-de-emprego-'+slug(subject)};
+    if (id==='infojobs') return {url:'https://www.infojobs.com.br/vagas-de-emprego-'+slug(subject)+'.aspx'};
+    if (id==='superestagios' && radar.levels.includes('Estágio')) return {url:'https://www.superestagios.com.br/vagas/'+slug(term[0])};
+    if (id==='solides') return {url:'https://vagas.solides.com.br/'};
+    return null;
+  }).filter(Boolean);
+}
+
+function publicListings(id, settings, user=profile) {
+  if (settings.radar) return [...new Map(personalizedListings(id,settings,user).map((page)=>[page.url,page])).values()];
   const remote=settings.modes.includes('Remoto');
   const local=settings.modes.some((mode)=>mode!=='Remoto');
   const saoPaulo=settings.includeSaoPaulo!==false && settings.modes.includes('Híbrido');
@@ -448,7 +520,7 @@ function sourceIssue(error) {
   return 'network';
 }
 
-async function collectListings(page, id, fetcher, now) {
+async function collectListings(page, id, fetcher, now, radar) {
   const response=await listingResponse(page,id,fetcher);
   if (!response.ok) throw httpFailure(response.status);
   const finalUrl=url(response.url || page.url);
@@ -466,7 +538,7 @@ async function collectListings(page, id, fetcher, now) {
     if (!parsed || sourceForUrl(parsed)?.id!==id || !isListing(id,parsed)) return;
     const knownInternship=id==='superestagios' && !internship.test(norm(title));
     const subject=knownInternship?'Estágio em '+title:title;
-    if (!likelyTitle(subject)) return;
+    if (radar?!jobLevels(subject,knownInternship?'intern':'').some((level)=>radar.levels.includes(level)):!likelyTitle(subject)) return;
     if (publishedAt && !fresh(publishedAt,now)) return;
     const cleaned=cleanListing(parsed,id);
     if (cleaned && !found.has(cleaned)) found.set(cleaned,{url:cleaned,title:subject,publishedAt:publishedAt || undefined,...(id==='superestagios'?{type:'vacancy_type_internship'}:{})});
@@ -539,7 +611,27 @@ async function firecrawl(fetcher, key, route, payload, timeout=12000) {
   return result;
 }
 
+function customWebQueries(settings,user,domains=[]) {
+  const radar=settings.radar;
+  const terms=careerTerms(radar,user);
+  const quote=(value)=>'"'+value.replaceAll('"','')+'"';
+  const levelTerms={Estágio:'(estágio OR internship)',Júnior:'(júnior OR junior)',Pleno:'(pleno OR "mid level")',
+    Sênior:'(sênior OR senior)',Analista:'(analista OR analyst)',Trainee:'trainee','Jovem aprendiz':'aprendiz',Outro:'vaga'};
+  const levels=radar.levels.map((level)=>levelTerms[level]).join(' OR ');
+  const scopes=[];
+  if (settings.modes.some((mode)=>mode!=='Remoto') && radar.locations.length) scopes.push('('+radar.locations.map(quote).join(' OR ')+')');
+  if (settings.modes.includes('Remoto') && radar.remoteLocations.length) scopes.push('(remoto OR remote) ('+radar.remoteLocations.map(quote).join(' OR ')+' OR worldwide)');
+  const query=(keywords)=>'(vaga OR recrutamento OR jobs) ('+levels+') ('+keywords.map(quote).join(' OR ')+') ('+scopes.join(' OR ')+')';
+  const queries=[];
+  for (let i=0;i<terms.length;i+=4) queries.push({query:query(terms.slice(i,i+4)),country:'BR'});
+  if (domains.length && terms.length) queries.push({query:query(terms.slice(0,6))+' ('+domains.map((id)=>'site:'+SEARCH_DOMAINS[id]).join(' OR ')+')',country:'BR'});
+  const competencies=(user.skills || []).slice(0,3);
+  if (competencies.length && terms.length) queries.push({query:query(terms.slice(0,4))+' ('+competencies.map(quote).join(' OR ')+')',country:'BR'});
+  return queries;
+}
+
 function webQueries(settings, user, enabled, key) {
+  if (settings.radar) return customWebQueries(settings,user,enabled.filter((id)=>SEARCH_DOMAINS[id]));
   const technical=skills.filter(([,pattern])=>pattern.test(norm(user.skills.join(' ')))).slice(0,4).map(([label])=>'"'+label+'"').join(' OR ') || 'JavaScript OR TypeScript';
   const domains=enabled.map((id)=>SEARCH_DOMAINS[id]).filter(Boolean).map((domain)=>'site:'+domain);
   const secondary=['superestagios','empregos','infojobs','solides','glassdoor','jooble']
@@ -583,25 +675,25 @@ async function alexandria(fetcher,key,settings) {
   throw new Error('Alexandria não concluiu a busca');
 }
 
-async function inspect(candidate, user, scrapeFallback, fetcher, now, remaining=1) {
+async function inspect(candidate, user, scrapeFallback, fetcher, now, settings, remaining=1) {
   let original;
   try { original=await fetchPage(fetcher,candidate.url); } catch { original={kind:'unverified'}; }
   if (original.kind==='closed') return original;
   if (original.kind==='page') {
-    const result=parsePage(original.html,original.url,candidate,user,now);
-    if (result.kind==='original' && remaining) return inspect({...candidate,url:result.url},user,scrapeFallback,fetcher,now,remaining-1);
+    const result=parsePage(original.html,original.url,candidate,user,now,settings);
+    if (result.kind==='original' && remaining) return inspect({...candidate,url:result.url},user,scrapeFallback,fetcher,now,settings,remaining-1);
     if (result.kind!=='unverified') return result;
   }
   const result=await scrapeFallback(candidate.url);
   const scrapedUrl=result?.data?.metadata?.sourceURL || candidate.url;
   const html=result?.data?.rawHtml;
   if (!html) return {kind:'unverified'};
-  const parsed=parsePage(html,scrapedUrl,candidate,user,now);
-  if (parsed.kind==='original' && remaining) return inspect({...candidate,url:parsed.url},user,scrapeFallback,fetcher,now,remaining-1);
+  const parsed=parsePage(html,scrapedUrl,candidate,user,now,settings);
+  if (parsed.kind==='original' && remaining) return inspect({...candidate,url:parsed.url},user,scrapeFallback,fetcher,now,settings,remaining-1);
   return parsed;
 }
 
-async function scan({settings,user,key='',fetcher,previous=[],now=Date.now(),onProgress=()=>{}}) {
+async function scan({settings,user,key='',fetcher,previous=[],importUrl,now=Date.now(),onProgress=()=>{}}) {
   const configured=Array.isArray(settings.sourceIds)?settings.sourceIds:settings.gupy?['gupy']:[];
   const enabled=JOB_SOURCES.filter((source)=>source.searchable!==false && configured.includes(source.id)).map((source)=>source.id);
   const reads=[];
@@ -656,11 +748,21 @@ async function scan({settings,user,key='',fetcher,previous=[],now=Date.now(),onP
     return requestFirecrawl('scrape',{url:address,formats:['rawHtml'],maxAge:0,timeout:7500},verify).catch(()=>null);
   }
 
+  if (importUrl) {
+    const address=listingAddress(importUrl);
+    const source=address && sourceForUrl(address);
+    if (!source || source.searchable===false || !isListing(source.id,address)) return {kind:'unverified'};
+    const original=cleanListing(address,source.id);
+    const result=await inspect({url:original},user,scrapeFallback,verify,now,{...settings,sourceIds:[...new Set([...enabled,source.id])]});
+    if (result.kind==='verified' && !coverageAllows(result.job,settings)) return {kind:'filtered'};
+    return result;
+  }
+
   async function inspectCandidate(candidate) {
     let result;
     try {
-      const saved=cached.get(canonical(candidate.url));
-      result=saved ? {kind:'verified',job:saved} : await inspect(candidate,user,scrapeFallback,verify,now);
+      const saved=!settings.radar && cached.get(canonical(candidate.url));
+      result=saved ? {kind:'verified',job:saved} : await inspect(candidate,user,scrapeFallback,verify,now,{...settings,sourceIds:enabled});
     } catch {
       result={kind:'unverified'};
     }
@@ -690,12 +792,12 @@ async function scan({settings,user,key='',fetcher,previous=[],now=Date.now(),onP
 
   function enqueue(candidate, earlyOnly=false) {
     if (scheduled>=92 || scanDeadline.aborted) return;
-    const submitted=url(candidate.url);
+    const submitted=listingAddress(candidate.url);
     if (!submitted) return;
     const source=sourceForUrl(submitted);
     if (source && (!enabled.includes(source.id) || !isListing(source.id,submitted))) return;
     const candidateUrl=cleanListing(submitted,source?.id);
-    if (!candidateUrl || requests.has(candidateUrl) || senior.test(norm(candidate.title)) || excluded.test(norm(candidate.title))) return;
+    if (!candidateUrl || requests.has(candidateUrl) || !settings.radar && (senior.test(norm(candidate.title)) || excluded.test(norm(candidate.title)))) return;
     if (!candidate.workplaceType && !candidate.type && !likelyTitle(candidate.title) &&
         !/job|vaga|careers|career|recruit|trabalhe|oportunidade|apply/i.test(submitted.pathname)) return;
     if (earlyOnly) {
@@ -735,32 +837,35 @@ async function scan({settings,user,key='',fetcher,previous=[],now=Date.now(),onP
   }
 
   if (enabled.includes('gupy')) {
-    track('gupy',mapPool(gupyFeeds(settings),6,streamRead((feed)=>gupy(feed,settings,discoverListings,now))));
+    track('gupy',mapPool(gupyFeeds(settings,user),6,streamRead((feed)=>gupy(feed,settings,discoverListings,now))));
   }
   for (const id of enabled.filter((item)=>item!=='gupy')) {
-    const pages=publicListings(id,settings);
-    if (pages.length) track(id,mapPool(pages,id==='linkedin'?2:3,streamRead((page)=>collectListings(page,id,discoverListings,now))));
+    const pages=publicListings(id,settings,user);
+    if (pages.length) track(id,mapPool(pages,id==='linkedin'?2:3,streamRead((page)=>collectListings(page,id,discoverListings,now,settings.radar))));
   }
   if (settings.firecrawl) {
     const providerSearch=streamRead(async ({query,country})=>{
       if (providerLimited) throw new Error('Limite do Firecrawl');
       const result=await requestFirecrawl('search',{query,limit:key?12:10,country,...(country==='BR'?{location:'Brazil'}:{}),tbs:'qdr:m'});
       if (!Array.isArray(result.data?.web)) throw listingFailure('Firecrawl retornou dados incompletos');
-      return result.data.web;
+      return result.data.web.map(({url,title})=>({url,title}));
     });
     track('firecrawl',mapPool(webQueries(settings,user,enabled,key),2,providerSearch));
-    if (key && settings.alexandria) track('alexandria',mapPool([null],1,streamRead(()=>alexandria(discover,key,settings))));
+    if (key && settings.alexandria && !settings.radar) track('alexandria',mapPool([null],1,streamRead(()=>alexandria(discover,key,settings))));
     const prioritySources=['jobbol','indeed'];
     const recoveryGroups=[prioritySources,enabled.filter((id)=>!prioritySources.includes(id))];
     for (const group of recoveryGroups) {
       const recovery=group.filter((id)=>direct.has(id) && SEARCH_DOMAINS[id]);
       if (!recovery.length) continue;
       const recover=Promise.all(recovery.map(async (id)=>[id,await direct.get(id)])).then(async (answers)=>{
-        const unavailable=answers.filter(([id,items])=>['error','limited'].includes(health[id]) || health[id]==='partial'&&!items.length).map(([id])=>id);
+        const unavailable=answers.filter(([id,items])=>['error','limited'].includes(health[id]) || !items.length).map(([id])=>id);
         if (!unavailable.length || providerLimited || discoveryDeadline.aborted) return;
         const domains=unavailable.map((id)=>'site:'+SEARCH_DOMAINS[id]).join(' OR ');
         const places=settings.includeSaoPaulo!==false?'("Rio de Janeiro" OR "São Paulo" OR remoto)':'("Rio de Janeiro" OR remoto)';
-        const discovered=await providerSearch({query:'(estágio OR júnior) (software OR desenvolvimento OR programação) '+places+' ('+domains+')',country:'BR'}).catch(()=>[]);
+        const query=settings.radar?customWebQueries(settings,user,unavailable).find((item)=>item.query.includes('site:')):
+          {query:'(estágio OR júnior) (software OR desenvolvimento OR programação) '+places+' ('+domains+')',country:'BR'};
+        if (!query) return;
+        const discovered=await providerSearch(query).catch(()=>[]);
         groups.push(discovered);
       });
       reads.push(recover);

@@ -15,7 +15,7 @@ const sourceFor = (name) => sources.find((source)=>normalize(source.name)===norm
 const sourceImage = (source) => '<span class="source-logo" data-fallback="'+esc(initials(source.name))+'" aria-hidden="true"><img src="assets/sources/'+esc(source.logo)+'" alt=""></span>';
 
 const defaults = {
-  demo:true, jobs:[], saved:['demo-1'], applications:{}, manualApplications:[], alerts:[], profile:INITIAL_PROFILE,
+  demo:true, jobs:[], hiddenJobIds:[], saved:['demo-1'], applications:{}, manualApplications:[], alerts:[], profile:INITIAL_PROFILE,
   settings:{auto:true, notifications:true, modes:['Remoto','Híbrido','Presencial'], theme:'system', sourceIds:radarSources.map((source)=>source.id), includeSaoPaulo:true, includeInternational:true, firecrawl:true},
   status:{running:false, lastRun:null, nextRun:null, sources:{}}
 };
@@ -48,11 +48,11 @@ const initials = (name) => name.trim().split(/\s+/).slice(0,2).map((word)=>word[
 const allJobs = () => state.demo ? DEMO_JOBS : state.jobs;
 const isRecent = (job) => Date.parse(job.publishedAt) >= Date.now() - 30 * 86400000 && (!job.validThrough || Date.parse(job.validThrough) >= Date.now());
 const jobRegion = (job) => job.regionKey || (job.manual?'':job.mode==='Remoto'?'br':'rio');
-const activeCoverage = (job) => state.settings.modes.includes(job.mode) &&
+const activeCoverage = (job) => state.settings.radar?job.radarMatch!==false && searchCoverage(job,state.settings.modes,state.settings.radar):state.settings.modes.includes(job.mode) &&
   (jobRegion(job)!=='sp' || state.settings.includeSaoPaulo!==false) &&
   (jobRegion(job)!=='international' || state.settings.includeInternational!==false);
 const trackingFor = (id) => activeApplication(state.applications[id]);
-const currentJobs = () => allJobs().filter((job)=>!trackingFor(job.id) && isRecent(job) && (state.demo || activeCoverage(job)));
+const currentJobs = () => allJobs().filter((job)=>!trackingFor(job.id) && !state.hiddenJobIds?.includes(job.id) && isRecent(job) && (state.demo || activeCoverage(job)));
 const stageLabel = (id) => APPLICATION_STATES.find((stage)=>stage.id===id)?.label || 'Em preenchimento';
 const scheduleLabel = SCAN_TIMES.map((time)=>time.replace(':00','h')).join(' · ');
 const scheduleTime = new Intl.DateTimeFormat('pt-BR',{timeZone:'America/Sao_Paulo',hour:'2-digit',minute:'2-digit'});
@@ -73,6 +73,8 @@ function fallback(action, payload = {}) {
     catch { return defaults; }
   }
   if (action === 'toggleSaved') state = {...state,saved:isSaved(payload.id) ? state.saved.filter((id)=>id !== payload.id) : [...state.saved,payload.id]};
+  if (action === 'dismissJob') state={...state,hiddenJobIds:[...new Set([...state.hiddenJobIds,payload.id])]};
+  if (action === 'updateRadar') state={...state,settings:{...state.settings,radar:radarPreferences(payload),modes:payload.modes}};
   if (action === 'updateProfile') state = {...state,profile:{...state.profile,...payload}};
   if (['updateSettings','updateSources','updateTheme'].includes(action)) state = {...state,settings:{...state.settings,...payload}};
   if (['startApplication','markApplied','updateApplication','restoreApplication'].includes(action)) {
@@ -181,10 +183,12 @@ function hero() {
     ['bookmark', allJobs().filter((job)=>isSaved(job.id)).length, 'Vagas salvas', '']
   ];
   const areas=['Rio de Janeiro',...(state.settings.includeSaoPaulo!==false?['São Paulo híbrido']:[]),...(state.settings.includeInternational!==false?['exterior']:[])];
-  const coverage=areas.join(' · ');
+  const radar=state.settings.radar;
+  const coverage=radar?[...radar.locations,...(state.settings.modes.includes('Remoto')?radar.remoteLocations.map((place)=>place+' remoto'):[])].join(' · '):areas.join(' · ')+' · remoto no Brasil';
+  const target=radar?[...radar.titles,...radar.areas,...(radar.useCourse && state.profile.course?[state.profile.course]:[])].slice(0,3).join(' · '):'Estágios e vagas júnior em tecnologia';
   const artwork = '<div class="radar-art" aria-hidden="true"><span style="--d:300px"></span><span style="--d:245px"></span><span style="--d:185px"></span><span style="--d:125px"></span><span style="--d:62px"></span><b style="--x:73%;--y:36%"></b><b style="--x:39%;--y:63%"></b><b style="--x:51%;--y:49%"></b><b style="--x:66%;--y:61%"></b></div>';
   return '<section class="hero">'+artwork+
-    '<div class="hero-text"><span class="hero-label">'+icon('radar')+' '+(state.settings.auto?'BUSCA DIÁRIA · '+esc(scheduleLabel)+' BRT':'BUSCA MANUAL')+'</span><h1>Seu radar de vagas</h1><p>Estágios e vagas júnior em tecnologia<br>'+esc(coverage)+' · remoto no Brasil</p></div>'+
+    '<div class="hero-text"><span class="hero-label">'+icon('radar')+' '+(state.settings.auto?'BUSCA DIÁRIA · '+esc(scheduleLabel)+' BRT':'BUSCA MANUAL')+'</span><h1>Seu radar de vagas</h1><p>'+esc(target)+'<br>'+esc(coverage)+'</p></div>'+
     '<div class="hero-action"><button class="button" data-action="'+(state.demo?'enable':'scan')+'" '+(state.status.running?'disabled':'')+'>'+icon(state.demo?'zap':'refresh-cw')+(state.demo?' Ativar busca real':state.status.running?' Buscando…':' Buscar agora')+'</button></div></section>'+
     '<div class="stats">'+stats.map(([symbol,count,label,caption])=>'<article class="stat"><span class="stat-mark">'+icon(symbol)+'</span><div><strong>'+count+'</strong><p>'+label+'</p></div>'+(caption?'<span class="tag stat-side">'+caption+'</span>':'')+'</article>').join('')+'</div>';
 }
@@ -256,10 +260,13 @@ function pickDropdown(menu,option) {
 
 function board() {
   const orders=page==='applications'?[['updated','Última atualização'],...filtersMenu.sort.items]:filtersMenu.sort.items;
+  const radar=state.settings.radar;
+  const locations=radar?[['Todas','Localidade'],...new Set([...radar.locations,...radar.remoteLocations])].map((item)=>Array.isArray(item)?item:[item,item]):filtersMenu.locationFilter.items;
+  const levels=radar?new Set([...radar.levels,...(page==='radar'?[]:JOB_TYPES)]):['Estágio','Júnior'];
   const toolbar = '<div class="result-tools"><label class="search">'+icon('search')+'<input id="search" type="search" aria-label="Buscar na lista" placeholder="Cargo, empresa ou tecnologia" value="'+esc(search)+'"></label>'+
-    dropdown('locationFilter',locationFilter)+dropdown('sort',sort,orders)+'</div>'+
-    '<div class="filters" aria-label="Modalidade">'+['Todas','Remoto','Híbrido','Presencial','Estágio','Júnior'].map((item)=>'<button class="filter'+(item===mode?' active':'')+'" aria-pressed="'+(item===mode)+'" data-mode="'+item+'">'+item+'</button>').join('')+'</div>';
-  return '<div class="grid"><section class="results" aria-label="Lista de vagas"><div class="section-head"><div><h2>'+ (page==='radar'?'Oportunidades':pageNames[page])+'</h2><p id="resultSummary"></p></div></div>'+toolbar+
+    dropdown('locationFilter',locationFilter,locations)+dropdown('sort',sort,orders)+'</div>'+
+    '<div class="filters" aria-label="Modalidade">'+['Todas',...JOB_MODES,...levels].map((item)=>'<button class="filter'+(item===mode?' active':'')+'" aria-pressed="'+(item===mode)+'" data-mode="'+item+'">'+item+'</button>').join('')+'</div>';
+  return '<div class="grid"><section class="results" aria-label="Lista de vagas"><div class="section-head"><div><h2>'+ (page==='radar'?'Oportunidades':pageNames[page])+'</h2><p id="resultSummary"></p></div>'+(page==='radar'?'<button class="button secondary" data-action="showImport">'+icon('external-link')+' Importar link</button>':'')+'</div>'+toolbar+
     '<div id="jobList"></div><button class="button secondary" id="moreJobs" type="button" aria-controls="jobList" hidden>Mostrar mais vagas</button></section><section id="jobDetail" aria-label="Detalhes da vaga"></section></div>';
 }
 
@@ -280,7 +287,8 @@ function card(job, top) {
     '<div class="card-tags">'+[job.type,...job.skills.slice(0,4)].map((tag)=>'<span class="tag">'+esc(tag)+'</span>').join('')+'</div></div>'+
     '<div class="card-right"><span class="pill score-pill '+(job.score>=85?'green':'')+'">'+job.score+'%</span><div class="card-tools">'+
     iconButton(saved?'bookmark-check':'bookmark',saved?'Remover dos salvos':'Salvar vaga','toggleSaved',job.id,saved?'is-saved':'')+
-    (application?'':iconButton('clipboard-check','Marcar candidatura como enviada','markJobApplied',job.id))+'</div></div></article>';
+    (application?'':iconButton('clipboard-check','Marcar candidatura como enviada','markJobApplied',job.id))+
+    (page==='radar'?iconButton('trash-2','Remover vaga do radar','dismissJob',job.id):'')+'</div></div></article>';
 }
 
 function accordion(label, symbol, content, open = false) {
@@ -439,8 +447,9 @@ function results() {
   const query = normalize(search.trim());
   const jobs = base.filter((job)=>
     (!query || normalize([job.title,job.company,job.location,job.channel,job.site,...(job.skills || [])].join(' ')).includes(query)) &&
-    (mode==='Todas' || mode===job.mode || mode===job.type) &&
-    (locationFilter==='Todas' || locationFilter===jobRegion(job))
+    (mode==='Todas' || mode===job.mode || (job.levels || [job.type]).includes(mode)) &&
+    (locationFilter==='Todas' || (state.settings.radar?
+      (job.remoteLocations || job.locations || [job.location]).some((location)=>matchesLocation(location,locationFilter)):locationFilter===jobRegion(job)))
   ).sort((a,b)=>sort==='updated' ? updatedTime(b)-updatedTime(a) :
     sort==='recent' ? compareRecent(a,b) : compareMatch(a,b));
   const selectedIndex=jobs.findIndex((job)=>job.id===selected);
@@ -456,19 +465,35 @@ function results() {
   $('#jobDetail').innerHTML = details(displayed);
 }
 
+function radarPreferenceForm() {
+  const radar=state.settings.radar || {areas:[],titles:[],levels:['Estágio','Júnior'],locations:[],remoteLocations:['Brasil'],useCourse:true};
+  const field=(name,label,hint)=>'<label>'+label+'<textarea name="'+name+'" rows="3" maxlength="1000" placeholder="'+esc(hint)+'">'+esc(radar[name].join('\n'))+'</textarea></label>';
+  const choices=(id,values,selected)=>'<div class="checks">'+values.map((value)=>'<label><input type="checkbox" name="'+id+'" value="'+value+'"'+checked(selected.includes(value))+'> '+value+'</label>').join('')+'</div>';
+  return '<section class="panel"><h2>Preferências do radar</h2><form id="radarForm" class="form">'+
+    '<p>Digite uma área, um cargo ou uma localidade por linha. O radar pode usar o curso e as competências do perfil para buscar e ordenar vagas.</p>'+
+    '<div class="manual-form-row">'+field('areas','Áreas de atuação','Desenvolvimento\nDesign\nMarketing')+
+    field('titles','Cargos de interesse','Desenvolvedor front-end\nAnalista de dados')+'</div>'+
+    '<label class="check"><input type="checkbox" name="useCourse"'+checked(radar.useCourse)+'> Usar o curso do perfil na busca</label>'+
+    '<fieldset class="source-options"><legend>Níveis e tipos de vaga</legend>'+choices('level',JOB_TYPES,radar.levels)+'</fieldset>'+
+    '<fieldset class="source-options"><legend>Modalidades</legend>'+choices('mode',JOB_MODES,state.settings.modes)+'</fieldset>'+
+    '<div class="manual-form-row">'+field('locations','Cidades ou países para presencial e híbrido','Curitiba, PR\nLisboa, Portugal')+
+    field('remoteLocations','De onde você pode trabalhar remotamente','Brasil\nPortugal')+'</div>'+
+    '<button type="submit" class="button primary">'+icon('check')+' Salvar preferências do radar</button></form></section>';
+}
+
 function profilePage() {
   const profile=state.profile;
   return title('Meu perfil','Atualize os dados usados para calcular a aderência das vagas.')+
     '<div class="settings-grid"><section class="panel"><h2>Formação e experiência</h2><form id="profileForm" class="form">'+
     '<label>Nome<input name="name" required maxlength="100" value="'+esc(profile.name)+'"></label>'+
-    '<label>Curso<input name="course" required maxlength="150" value="'+esc(profile.course)+'"></label>'+
+    '<label>Curso<input name="course" maxlength="150" value="'+esc(profile.course)+'"></label>'+
     '<label>Período<input name="period" maxlength="40" value="'+esc(profile.period)+'"></label>'+
-    '<label>Previsão de conclusão<input name="graduation" required type="month" value="'+esc(profile.graduation)+'"></label>'+
+    '<label>Previsão de conclusão<input name="graduation" type="month" value="'+esc(profile.graduation)+'"></label>'+
     '<label>Experiência<input name="experience" maxlength="300" value="'+esc(profile.experience)+'"></label>'+
     '<label>Competências, separadas por vírgula<textarea name="skills" maxlength="1500">'+esc(profile.skills.join(', '))+'</textarea></label>'+
     '<button class="button primary" type="submit">'+icon('check')+' Salvar perfil</button></form></section>'+
     '<section class="panel"><span class="stat-mark">'+icon('file-text')+'</span><h2>Currículo em PDF</h2><p>Selecione o arquivo para localizar e anexar seu currículo manualmente ao preencher uma candidatura.</p><p><strong>'+esc(profile.resumeName || 'Nenhum arquivo selecionado')+'</strong></p><button class="button secondary" data-action="resume">'+icon('upload')+' Selecionar PDF</button>'+
-    (profile.resumeName?' <button class="button secondary" data-action="removeResume">Remover PDF</button>':'')+'</section></div>';
+    (profile.resumeName?' <button class="button secondary" data-action="removeResume">Remover PDF</button>':'')+'</section></div>'+radarPreferenceForm();
 }
 
 function sourceStatus(key) {
@@ -530,10 +555,11 @@ function settingsPage() {
     '<div class="schedule-box" id="dailySchedule">'+scheduleDetails()+'</div>'+
     '<p>O radar continua rodando com a janela fechada enquanto o ícone estiver na bandeja do sistema.</p>'+
     '<label class="check"><input type="checkbox" name="notifications"'+checked(state.settings.notifications)+'> Notificações do sistema para novas vagas</label>'+
+    (state.settings.radar?'<p>Edite áreas, níveis, modalidades e localidades em <button class="button secondary" type="button" data-action="radarPreferences">Meu perfil</button>.</p>':
     '<hr><h2>Modalidades</h2><div class="checks">'+['Remoto','Híbrido','Presencial'].map((item)=>'<label><input type="checkbox" name="mode" value="'+item+'"'+checked(state.settings.modes.includes(item))+'> '+item+'</label>').join('')+'</div>'+
     '<fieldset class="source-options"><legend>Localidades</legend><p>Rio de Janeiro/RJ para presencial e híbrido. Remoto precisa aceitar candidatos no Brasil.</p>'+
     '<label class="check"><input type="checkbox" name="includeSaoPaulo"'+checked(state.settings.includeSaoPaulo!==false)+'> São Paulo capital · híbrido</label>'+
-    '<label class="check"><input type="checkbox" name="includeInternational"'+checked(state.settings.includeInternational!==false)+'> Exterior · modalidades selecionadas</label></fieldset>'+
+    '<label class="check"><input type="checkbox" name="includeInternational"'+checked(state.settings.includeInternational!==false)+'> Exterior · modalidades selecionadas</label></fieldset>')+
     '<p>Publicações dos últimos 30 dias.</p>'+
     '<button class="button primary" type="submit">'+icon('check')+' Salvar preferências</button></form></section>'+
     '<div><section class="panel"><h2>Aparência</h2><label>Tema do aplicativo<select id="appearanceTheme" aria-label="Tema do aplicativo">'+
@@ -608,6 +634,11 @@ async function action(name, id) {
     if (page==='settings') $('#appearanceTheme').value=state.settings.theme;
     return;
   }
+  if (name==='radarPreferences') {
+    navigate('profile');
+    $('#radarForm')?.scrollIntoView({block:'start'});
+    return;
+  }
   if (name==='closeDialog') { $('#dialog').close(); return; }
   if (name==='alertJob') { $('#dialog').close(); jumpJob(id); return; }
   if (name==='editManualEntry') {
@@ -620,6 +651,19 @@ async function action(name, id) {
   if (name==='removeManualLogo') {
     const form=$('#manualApplicationForm');
     if (form) setManualLogo(form,'');
+    return;
+  }
+  if (name==='showImport') {
+    if (!desktop) { desktopRequired(); return; }
+    modal('Importar vaga por link','<form id="importJobForm" class="form"><p>Cole o link da vaga no portal ou o link do resultado do Google que aponta para esse anúncio.</p>'+
+      '<label>Link da vaga<input name="address" type="url" maxlength="8192" required></label>'+
+      '<button class="button primary" type="submit">Verificar e importar</button></form>');
+    return;
+  }
+  if (name==='dismissJob' && job) {
+    await request(name,{id});
+    render();
+    notify('Vaga removida do radar');
     return;
   }
   if (name==='toggleSaved' && job) {
@@ -831,12 +875,20 @@ $('#content').addEventListener('submit',async (event)=>{
       }
       return;
     }
+    if (form.id==='radarForm') {
+      await request('updateRadar',{...Object.fromEntries(data),levels:data.getAll('level'),modes:data.getAll('mode'),useCourse:data.has('useCourse')});
+      render();
+      $('#radarForm')?.scrollIntoView({block:'nearest'});
+      notify('Preferências salvas. Use Buscar agora no radar para consultar novas vagas.');
+      return;
+    }
     if (form.id==='profileForm') {
       await request('updateProfile',{...Object.fromEntries(data),skills:data.get('skills').split(',').map((skill)=>skill.trim()).filter(Boolean)});
     }
     if (form.id==='settingsForm') {
-      if (!data.getAll('mode').length) { notify('Escolha pelo menos uma modalidade.'); return; }
-      await request('updateSettings',{auto:data.has('auto'),notifications:data.has('notifications'),modes:data.getAll('mode'),includeSaoPaulo:data.has('includeSaoPaulo'),includeInternational:data.has('includeInternational')});
+      const modes=state.settings.radar?state.settings.modes:data.getAll('mode');
+      if (!modes.length) { notify('Escolha pelo menos uma modalidade.'); return; }
+      await request('updateSettings',{auto:data.has('auto'),notifications:data.has('notifications'),modes,includeSaoPaulo:data.has('includeSaoPaulo'),includeInternational:data.has('includeInternational')});
     }
     if (form.id==='applicationForm') {
       await request('updateApplication',{id:form.dataset.id,status:data.get('status'),notes:data.get('notes')});
@@ -853,6 +905,26 @@ $('#content').addEventListener('submit',async (event)=>{
     render();
     notify('Alterações salvas');
   } catch (error) { notify(error.message); }
+});
+
+$('#dialog').addEventListener('submit',async (event)=>{
+  if (event.target.id!=='importJobForm') return;
+  event.preventDefault();
+  const button=event.target.querySelector('[type="submit"]');
+  if (button.disabled) return;
+  button.disabled=true;
+  button.textContent='Verificando…';
+  try {
+    const result=await request('importJob',{address:new FormData(event.target).get('address')});
+    $('#dialog').close();
+    jumpJob(result.importedJobId);
+    notify('Vaga verificada e importada');
+  } catch (error) {
+    notify(error.message);
+  } finally {
+    button.disabled=false;
+    button.textContent='Verificar e importar';
+  }
 });
 
 $('#menuToggle').addEventListener('click',()=>$('.sidebar').classList.toggle('open'));
